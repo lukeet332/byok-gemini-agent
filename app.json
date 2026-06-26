@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "BYOK Gemini Agent",
+    "slug": "byok-gemini-agent",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0b0f14"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.lukeet332.byokgeminiagent"
+    },
+    "android": {
+      "package": "com.lukeet332.byokgeminiagent",
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": ["expo-secure-store"]
+  }
+}

@@ -1,0 +1,132 @@
+name: Build & Release
+
+# Build installable binaries and publish a GitHub Release on every push to main.
+# Also runnable on demand from the Actions tab.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Avoid overlapping releases racing for the same tag.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: "20"
+  JAVA_VERSION: "17"
+
+jobs:
+  # ---- Gate: typecheck before we spend build minutes ----
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+  # ---- Android: prebuild + Gradle -> APK (signed with the debug key) ----
+  android:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate native Android project
+        run: npx expo prebuild --platform android --no-install
+      - name: Build release APK
+        run: ./gradlew assembleRelease --no-daemon
+        working-directory: android
+      - name: Stage APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/*.apk out/byok-gemini-agent.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: out/byok-gemini-agent.apk
+          if-no-files-found: error
+
+  # ---- iOS: prebuild + xcodebuild -> UNSIGNED .ipa ----
+  # A real, installable IPA requires Apple signing (certificate + provisioning
+  # profile). This produces an unsigned archive useful for inspection or
+  # re-signing with sideloading tooling. See README for adding signing/EAS.
+  ios:
+    needs: verify
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Generate native iOS project
+        run: npx expo prebuild --platform ios --no-install
+      - name: Install CocoaPods
+        run: pod install
+        working-directory: ios
+      - name: Archive (unsigned)
+        run: |
+          WORKSPACE=$(ls ios/*.xcworkspace | head -1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          echo "Workspace=$WORKSPACE Scheme=$SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+      - name: Package unsigned IPA
+        run: |
+          APP=$(ls -d "$RUNNER_TEMP/app.xcarchive/Products/Applications/"*.app | head -1)
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/Payload/"
+          mkdir -p out
+          (cd "$RUNNER_TEMP" && zip -qry ipa.zip Payload)
+          cp "$RUNNER_TEMP/ipa.zip" out/byok-gemini-agent-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: out/byok-gemini-agent-unsigned.ipa
+          if-no-files-found: error
+
+  # ---- Publish a GitHub Release with both binaries attached ----
+  release:
+    needs: [android, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Build v1.0.${{ github.run_number }}
+          generate_release_notes: true
+          files: |
+            dist/byok-gemini-agent.apk
+            dist/byok-gemini-agent-unsigned.ipa
