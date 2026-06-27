@@ -104,9 +104,61 @@
       jars="/Users/luke/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib-jdk7/1.9.25/1c166692314a2639e5edfed0d23ed7eee4a5c7a5/kotlin-stdlib-jdk7-1.9.25.jar"
       resolved="org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.25"/>
   <library
+      name="dev.rikka.shizuku:api:13.1.5@aar"
+      jars="/Users/luke/.gradle/caches/8.10.2/transforms/5f049143806b9575e799b7eccd207a8e/transformed/api-13.1.5/jars/classes.jar"
+      resolved="dev.rikka.shizuku:api:13.1.5"
+      folder="/Users/luke/.gradle/caches/8.10.2/transforms/5f049143806b9575e799b7eccd207a8e/transformed/api-13.1.5"
+      manifest="AndroidManifest.xml"
+      resFolder="res"
+      assetsFolder="assets"
+      lintJar="lint.jar"
+      publicResources="public.txt"
+      symbolFile="R.txt"
+      externalAnnotations="annotations.zip"
+      proguardRules="proguard.txt"/>
+  <library
+      name="dev.rikka.shizuku:provider:13.1.5@aar"
+      jars="/Users/luke/.gradle/caches/8.10.2/transforms/96c467360fa98e7d86cb7494c143f759/transformed/provider-13.1.5/jars/classes.jar"
+      resolved="dev.rikka.shizuku:provider:13.1.5"
+      folder="/Users/luke/.gradle/caches/8.10.2/transforms/96c467360fa98e7d86cb7494c143f759/transformed/provider-13.1.5"
+      manifest="AndroidManifest.xml"
+      resFolder="res"
+      assetsFolder="assets"
+      lintJar="lint.jar"
+      publicResources="public.txt"
+      symbolFile="R.txt"
+      externalAnnotations="annotations.zip"
+      proguardRules="proguard.txt"/>
+  <library
       name="org.jetbrains:annotations:23.0.0@jar"
       jars="/Users/luke/.gradle/caches/modules-2/files-2.1/org.jetbrains/annotations/23.0.0/8cc20c07506ec18e0834947b84a864bfc094484e/annotations-23.0.0.jar"
       resolved="org.jetbrains:annotations:23.0.0"/>
+  <library
+      name="dev.rikka.shizuku:aidl:13.1.5@aar"
+      jars="/Users/luke/.gradle/caches/8.10.2/transforms/00c2b032c5b23ed4e0813c66fd3bd9d8/transformed/aidl-13.1.5/jars/classes.jar"
+      resolved="dev.rikka.shizuku:aidl:13.1.5"
+      folder="/Users/luke/.gradle/caches/8.10.2/transforms/00c2b032c5b23ed4e0813c66fd3bd9d8/transformed/aidl-13.1.5"
+      manifest="AndroidManifest.xml"
+      resFolder="res"
+      assetsFolder="assets"
+      lintJar="lint.jar"
+      publicResources="public.txt"
+      symbolFile="R.txt"
+      externalAnnotations="annotations.zip"
+      proguardRules="proguard.txt"/>
+  <library
+      name="dev.rikka.shizuku:shared:13.1.5@aar"
+      jars="/Users/luke/.gradle/caches/8.10.2/transforms/a407ad4e55e28144f5b50bd8c7a35c7a/transformed/shared-13.1.5/jars/classes.jar"
+      resolved="dev.rikka.shizuku:shared:13.1.5"
+      folder="/Users/luke/.gradle/caches/8.10.2/transforms/a407ad4e55e28144f5b50bd8c7a35c7a/transformed/shared-13.1.5"
+      manifest="AndroidManifest.xml"
+      resFolder="res"
+      assetsFolder="assets"
+      lintJar="lint.jar"
+      publicResources="public.txt"
+      symbolFile="R.txt"
+      externalAnnotations="annotations.zip"
+      proguardRules="proguard.txt"/>
   <library
       name="androidx.compose.foundation:foundation-android:1.7.6@aar"
       jars="/Users/luke/.gradle/caches/8.10.2/transforms/282f2f0f9e002a5c3e6611767080a595/transformed/foundation-release/jars/classes.jar"

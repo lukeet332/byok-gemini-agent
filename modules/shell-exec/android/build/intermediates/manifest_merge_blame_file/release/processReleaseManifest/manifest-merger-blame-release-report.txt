@@ -4,4 +4,24 @@
 4
 5    <uses-sdk android:minSdkVersion="24" />
 6
-7</manifest>
+7    <application>
+7-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:2:3-11:17
+8
+9        <!-- Required for the Shizuku binder to reach this app. -->
+10        <provider
+10-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:4:5-10:76
+11            android:name="rikka.shizuku.ShizukuProvider"
+11-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:5:7-51
+12            android:authorities="${applicationId}.shizuku"
+12-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:6:7-53
+13            android:enabled="true"
+13-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:8:7-29
+14            android:exported="true"
+14-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:9:7-30
+15            android:multiprocess="false"
+15-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:7:7-35
+16            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+16-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:10:7-73
+17    </application>
+18
+19</manifest>

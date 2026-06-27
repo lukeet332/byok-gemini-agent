@@ -1,9 +1,27 @@
 -- Merging decision tree log ---
 manifest
-ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-22
-INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-22
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-12:12
+INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-12:12
 	package
 		INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:11-69
+application
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:2:3-11:17
+provider#rikka.shizuku.ShizukuProvider
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:4:5-10:76
+	android:enabled
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:8:7-29
+	android:authorities
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:6:7-53
+	android:multiprocess
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:7:7-35
+	android:exported
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:9:7-30
+	android:permission
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:10:7-73
+	android:name
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:5:7-51
 uses-sdk
 INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml reason: use-sdk injection requested
 INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml

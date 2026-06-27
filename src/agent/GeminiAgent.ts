@@ -422,18 +422,23 @@ export const TOOLS: Tool[] = [
 const SHELL_TOOL: FunctionDeclaration = {
   name: "run_shell",
   description:
-    "Run a shell command ON THE DEVICE and get back stdout, stderr and the exit code. Runs as " +
-    "the app (`sh -c`) by default; set root=true to run as root (`su -c`) — only do that if the " +
-    "user has a rooted device and the command genuinely needs system access (it fails if there's " +
-    "no su). Android ships toybox, so coreutils (ls, cat, grep, ps, getprop…) work without root; " +
-    "compilers/interpreters only work if the user has installed them. Use this to inspect the " +
-    "device, run scripts, and — where toolchains exist — build/test code and iterate on failures. " +
-    "Each command needs the user's confirmation. Prefer root=false.",
+    "Run a shell command ON THE DEVICE and get back stdout, stderr and the exit code. The " +
+    "'privilege' level controls who runs it: 'app' (default) = the app's own sandbox uid; " +
+    "'shizuku' = ADB/shell-uid privileges WITHOUT root (works if the user has set up the Shizuku " +
+    "app — far more powerful: pm, cmd, settings, input/am UI automation, etc.); 'root' = full root " +
+    "via su (rooted devices only). Android ships toybox, so coreutils (ls, cat, grep, ps, getprop…) " +
+    "work even at 'app' level; compilers/interpreters only if installed. Use this to inspect the " +
+    "device, run scripts, automate other apps (with shizuku/root), and — where toolchains exist — " +
+    "build/test code and iterate on failures. Each command needs the user's confirmation. Prefer " +
+    "the lowest level that works; escalate to shizuku/root only when needed.",
   parameters: {
     type: "object",
     properties: {
       command: { type: "string", description: "The shell command line to run." },
-      root: { type: "boolean", description: "Run as root via su (default false). Only on rooted devices." },
+      privilege: {
+        type: "string",
+        description: "One of: 'app' (default, sandbox), 'shizuku' (ADB/shell-uid, no root), 'root' (su).",
+      },
     },
     required: ["command"],
   },
@@ -501,9 +506,12 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
       return { ok: false, error: "Shell execution is disabled. The user can turn it on in Settings." };
     const command = String(args.command ?? "");
     if (!command.trim()) return { ok: false, error: "Missing command." };
-    const root = args.root === true || args.root === "true";
+    const privilege = String(args.privilege ?? "app").toLowerCase();
     try {
-      const r = await Shell.exec(command, root, 120000);
+      const r =
+        privilege === "shizuku"
+          ? await Shell.execShizuku(command, 120000)
+          : await Shell.exec(command, privilege === "root", 120000);
       return {
         ok: r.exitCode === 0 && !r.timedOut,
         exitCode: r.exitCode,
@@ -691,7 +699,7 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
       : "";
 
   const shellLine = (await getShellEnabled().catch(() => false))
-    ? "\n\nShell execution is ENABLED: you can run_shell(command, root?) on the device. Use it to inspect the device, run scripts, and — where the needed toolchains are installed — build and TEST code, then read the output and fix failures (the compile→run→fix loop). Prefer root=false; only use root=true on a rooted device when system access is required. Every command is confirmed by the user."
+    ? "\n\nShell execution is ENABLED: you can run_shell(command, privilege?) on the device. privilege is 'app' (default sandbox), 'shizuku' (ADB/shell-uid without root — pm/cmd/settings/input-am automation, if the user set up Shizuku), or 'root' (su, rooted only). Use it to inspect the device, run scripts, automate other apps, and — where toolchains are installed — build and TEST code then read the output and fix failures (the compile→run→fix loop). Prefer the lowest privilege that works; escalate only when needed. Every command is confirmed by the user."
     : "";
 
   const mcp = McpClient.connectedSummary();
@@ -1303,8 +1311,9 @@ export async function runAgentTurn(
         } else if (call.name === "run_shell") {
           needsConfirm = true;
           confirmMethod = "SHELL";
-          const isRoot = a.root === true || a.root === "true";
-          confirmUrl = `${isRoot ? "[root] " : ""}${String(a.command ?? "")}`;
+          const priv = String(a.privilege ?? "app").toLowerCase();
+          const tag = priv === "root" ? "[root] " : priv === "shizuku" ? "[shizuku] " : "";
+          confirmUrl = `${tag}${String(a.command ?? "")}`;
         } else if (call.name === "update_setting") {
           needsConfirm = true;
           confirmMethod = "SETTING";

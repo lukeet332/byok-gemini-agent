@@ -49,6 +49,7 @@ import {
 } from "../storage/SecureStorage";
 import { clearErrors, listErrorsByThread, ErrorGroup } from "../storage/ErrorLogStore";
 import { requestNotificationPermission } from "../agent/Background";
+import { requestShizukuPermission, shizukuStatus, ShizukuStatus } from "../../modules/shell-exec";
 import { getUserNotes, saveUserNotes } from "../storage/UserNotes";
 import {
   ANTHROPIC_DEFAULT_MODEL,
@@ -91,6 +92,8 @@ export default function SettingsScreen() {
   const [mcpVisible, setMcpVisible] = useState(false);
   const [promptOpen, setPromptOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [shizuku, setShizuku] = useState<ShizukuStatus>({ running: false, granted: false });
   const [userNotes, setUserNotes] = useState("");
   // Live model list from Google (null = loading/failed -> use presets).
   const [modelMenu, setModelMenu] = useState(false);
@@ -121,6 +124,7 @@ export default function SettingsScreen() {
       setAnthropicModel(an.model);
       setBackgroundRunState(await getBackgroundRun());
       setShellEnabledState(await getShellEnabled());
+      setShizuku(await shizukuStatus());
       setGithubToken(await getGithubToken());
       setWriteMode(await getWriteMode());
       setSystemPrompt(await getSystemPrompt());
@@ -130,6 +134,14 @@ export default function SettingsScreen() {
       setLoading(false);
     })();
   }, []);
+
+  async function refreshShizuku() {
+    setShizuku(await shizukuStatus());
+  }
+  async function grantShizuku() {
+    await requestShizukuPermission();
+    await refreshShizuku();
+  }
 
   async function onClearLogs() {
     await clearErrors();
@@ -434,24 +446,68 @@ export default function SettingsScreen() {
           />
         </View>
 
-        <Text style={styles.sectionLabel}>Shell execution (advanced)</Text>
-        <View style={styles.toggleRow}>
-          <View style={styles.toggleTextWrap}>
-            <Text style={styles.toggleName}>Let the AI run shell commands</Text>
+        <TouchableOpacity style={styles.accordionHead} onPress={() => setAdvancedOpen((o) => !o)}>
+          <Text style={styles.sectionLabel}>Advanced mode</Text>
+          <Text style={styles.accordionChevron}>{advancedOpen ? "▾" : "▸"}</Text>
+        </TouchableOpacity>
+        {advancedOpen ? (
+          <>
             <Text style={styles.hint}>
-              Gives the AI a run_shell tool to execute commands on this device — inspect the system, run
-              scripts, and (where you've installed toolchains) build & test code. Runs as the app by default;
-              it can request root (su) on rooted devices. Every command asks you to confirm first. Powerful and
-              risky — leave off unless you know what you're doing.
+              Turn Fraude into a local coding agent — let it run shell commands and set up real programming
+              tools on this device, via Shizuku (no root) or root. Powerful and risky; for advanced users.
             </Text>
-          </View>
-          <Switch
-            value={shellEnabled}
-            onValueChange={setShellEnabledState}
-            trackColor={{ false: theme.border, true: theme.accent }}
-            thumbColor={theme.text}
-          />
-        </View>
+
+            <View style={styles.toggleRow}>
+              <View style={styles.toggleTextWrap}>
+                <Text style={styles.toggleName}>Shell execution</Text>
+                <Text style={styles.hint}>
+                  Gives the AI a run_shell tool. Runs in the app sandbox by default; can escalate to Shizuku or
+                  root. Every command asks you to confirm first.
+                </Text>
+              </View>
+              <Switch
+                value={shellEnabled}
+                onValueChange={setShellEnabledState}
+                trackColor={{ false: theme.border, true: theme.accent }}
+                thumbColor={theme.text}
+              />
+            </View>
+
+            <Text style={styles.smallLabel}>Shizuku — shell access without root</Text>
+            <Text style={styles.hint}>
+              Shizuku grants ADB-level (shell-uid) privileges to apps without rooting — enough to run
+              pm/cmd/settings, automate other apps, and grant Fraude extra permissions. Install it, start it
+              once via Wireless Debugging, then grant access here.{"\n"}Status:{" "}
+              {shizuku.running ? (shizuku.granted ? "connected ✓" : "running — needs permission") : "not running"}.
+            </Text>
+            <Link label="How to set up Shizuku →" url="https://shizuku.rikka.app/guide/setup/" />
+            <View style={styles.advButtons}>
+              <TouchableOpacity style={styles.advBtn} onPress={refreshShizuku}>
+                <Text style={styles.advBtnText}>Refresh status</Text>
+              </TouchableOpacity>
+              {shizuku.running && !shizuku.granted ? (
+                <TouchableOpacity style={styles.advBtn} onPress={grantShizuku}>
+                  <Text style={styles.advBtnText}>Grant Shizuku access</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            <Text style={styles.smallLabel}>Root</Text>
+            <Text style={styles.hint}>
+              If your device is rooted, the AI can run commands as root (su) — confirmed each time, no extra
+              setup beyond a working su. Root also allows installing Fraude as a privileged system app (very
+              advanced, device-specific) — ask the assistant to walk you through it.
+            </Text>
+
+            <Text style={styles.smallLabel}>Local programming tools</Text>
+            <Text style={styles.hint}>
+              Android ships toybox (ls, grep, cat, ps…) but no compilers. For a full local toolchain (python,
+              node, clang, git…), install Termux + its packages — then, with shell execution on, just ask
+              Fraude to set up or run your project and it'll drive the steps via run_shell.
+            </Text>
+            <Link label="Get Termux (F-Droid) →" url="https://f-droid.org/packages/com.termux/" />
+          </>
+        ) : null}
 
         <Text style={styles.sectionLabel}>GitHub (coding)</Text>
         <Text style={styles.hint}>
@@ -716,6 +772,16 @@ const styles = StyleSheet.create({
   toggleRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 8 },
   toggleTextWrap: { flex: 1 },
   toggleName: { color: theme.text, fontSize: 15, fontWeight: "700" },
+  advButtons: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
+  advBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.accent,
+    backgroundColor: theme.surface,
+  },
+  advBtnText: { color: theme.accent, fontWeight: "700", fontSize: 13 },
   segItem: { flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: "center" },
   segItemOn: { backgroundColor: theme.accent },
   segText: { color: theme.textDim, fontSize: 14, fontWeight: "700" },
