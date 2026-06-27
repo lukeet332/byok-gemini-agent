@@ -106,14 +106,33 @@ export async function ensureConnections(): Promise<void> {
   }
 }
 
+// Gemini accepts only a JSON-schema subset. Recursively coerce an arbitrary MCP
+// inputSchema into something safe (drops $ref/anyOf/etc. that would 400 the whole
+// request and break ALL tools for the turn).
+const OK_TYPES = new Set(["object", "array", "string", "number", "integer", "boolean"]);
 function sanitizeSchema(s: any): ParamSchema {
-  if (!s || typeof s !== "object" || s.type !== "object") return { type: "object", properties: {} };
-  return {
-    type: "object",
-    properties: (s.properties as Record<string, ParamSchema>) ?? {},
-    ...(Array.isArray(s.required) ? { required: s.required } : {}),
-  };
+  if (!s || typeof s !== "object") return { type: "string" };
+  let type: string | undefined = typeof s.type === "string" ? s.type.toLowerCase() : undefined;
+  if (Array.isArray(s.type)) type = s.type.map((t: any) => String(t).toLowerCase()).find((t: string) => OK_TYPES.has(t));
+  if (!type || !OK_TYPES.has(type)) type = s.properties ? "object" : s.items ? "array" : "string";
+
+  const out: ParamSchema = { type };
+  if (typeof s.description === "string") out.description = s.description.slice(0, 300);
+  if (type === "object") {
+    const props: Record<string, ParamSchema> = {};
+    const sp = s.properties && typeof s.properties === "object" ? s.properties : {};
+    for (const k of Object.keys(sp).slice(0, 40)) props[k] = sanitizeSchema(sp[k]);
+    out.properties = props;
+    if (Array.isArray(s.required)) out.required = s.required.filter((r: any) => typeof r === "string" && r in props);
+  } else if (type === "array") {
+    out.items = sanitizeSchema(s.items ?? { type: "string" });
+  }
+  return out;
 }
+
+// Gemini caps how many function declarations a request can carry; keep the merged
+// total sane (built-ins + this) so a huge MCP server can't break tool use.
+const MAX_MCP_TOOLS = 64;
 
 // Gemini function declarations for all connected MCP tools.
 export function getMcpToolDeclarations(): FunctionDeclaration[] {
@@ -126,6 +145,10 @@ export function getMcpToolDeclarations(): FunctionDeclaration[] {
         parameters: sanitizeSchema(t.inputSchema),
       });
     }
+  }
+  if (decls.length > MAX_MCP_TOOLS) {
+    console.log(`[fraude] MCP tools capped ${decls.length} -> ${MAX_MCP_TOOLS}`);
+    return decls.slice(0, MAX_MCP_TOOLS);
   }
   return decls;
 }
