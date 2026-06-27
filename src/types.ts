@@ -53,6 +53,8 @@ export interface ChatMessage {
   text: string;
   // A tappable system notice (e.g. rate-limit prompt that opens Settings).
   action?: "open_settings";
+  // Marks a server-error notice that offers a manual retry control.
+  canRetry?: boolean;
 }
 
 // ---- Threads (locally persisted conversations) ----

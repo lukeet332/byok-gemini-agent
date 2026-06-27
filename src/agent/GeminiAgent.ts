@@ -7,6 +7,8 @@
 // Stored credentials are referenced by name and substituted in on-device right
 // before a request, so raw secret values never reach the model.
 
+import { fetch as expoFetch } from "expo/fetch";
+
 import { Content, FunctionCall, Part, Tool } from "../types";
 import { getGeminiKey, getModel, getSecretValue, getSystemPrompt, listSecretNames } from "../storage/SecureStorage";
 import { appendError } from "../storage/ErrorLogStore";
@@ -34,7 +36,10 @@ async function genEndpoint(): Promise<string> {
 // Fetch the live list of Gemini models that support generateContent, straight
 // from Google (so new models like newer flash/pro versions appear automatically).
 // Returns [] on any failure; callers fall back to MODEL_PRESETS.
+let modelsCache: string[] | null = null;
+
 export async function listModels(): Promise<string[]> {
+  if (modelsCache) return modelsCache; // cache for the session — avoids refetching
   const apiKey = await getGeminiKey();
   if (!apiKey) return [];
   try {
@@ -45,11 +50,13 @@ export async function listModels(): Promise<string[]> {
       models?: { name?: string; supportedGenerationMethods?: string[] }[];
     };
     if (!res.ok || !Array.isArray(data.models)) return [];
-    return data.models
+    const out = data.models
       .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
       .map((m) => (m.name ?? "").replace(/^models\//, ""))
       .filter((id) => id.startsWith("gemini"))
       .sort();
+    if (out.length) modelsCache = out;
+    return out;
   } catch {
     return [];
   }
@@ -463,49 +470,120 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
   return { role: "user", parts: [{ text: base + secretsLine + memoBlock }] };
 }
 
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-
-// Call Gemini with abort support and retry+backoff on transient errors
-// (rate limits / 5xx), honouring Retry-After when present.
+// Single attempt — NO auto-retry. Retrying burns more of the same quota; the UI
+// offers a manual retry instead. Honours abort.
 async function callGemini(
   contents: Content[],
   systemInstruction: Content,
   signal?: AbortSignal,
   withTools = true
 ): Promise<Content> {
+  if (signal?.aborted) throw new AbortedError();
   const apiKey = await getGeminiKey();
   if (!apiKey) throw new Error("No Gemini API key. Add it in Settings.");
   const url = `${await genEndpoint()}?key=${encodeURIComponent(apiKey)}`;
   const payload: Record<string, unknown> = { contents, systemInstruction };
   if (withTools) payload.tools = TOOLS;
-  const body = JSON.stringify(payload);
 
-  let lastErr = "Gemini request failed.";
-  for (let attempt = 0; attempt < 4; attempt++) {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    });
+  } catch (e) {
     if (signal?.aborted) throw new AbortedError();
-    let res: Response;
-    try {
-      res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body, signal });
-    } catch (e) {
-      if (signal?.aborted) throw new AbortedError();
-      lastErr = `Network error: ${String(e)}`;
-      await sleep(700 * (attempt + 1), signal);
-      continue;
-    }
-    const data = (await res.json().catch(() => ({}))) as GeminiResponse;
-    if (res.ok) {
-      if (data.promptFeedback?.blockReason)
-        throw new Error(`Request blocked by Gemini: ${data.promptFeedback.blockReason}.`);
-      const content = data.candidates?.[0]?.content;
-      if (!content) throw new Error("Gemini returned no content.");
-      return content;
-    }
-    lastErr = data.error?.message ?? `Gemini request failed (${res.status}).`;
-    if (!RETRYABLE_STATUS.has(res.status)) throw new Error(lastErr);
-    const retryAfter = Number(res.headers.get("retry-after"));
-    await sleep(retryAfter > 0 ? retryAfter * 1000 : 700 * Math.pow(2, attempt), signal);
+    throw new Error(`Network error: ${String(e)}`);
   }
-  throw new Error(`Gemini is busy (rate limited). ${lastErr}`);
+  const data = (await res.json().catch(() => ({}))) as GeminiResponse;
+  if (!res.ok) throw new Error(data.error?.message ?? `Gemini request failed (${res.status}).`);
+  if (data.promptFeedback?.blockReason)
+    throw new Error(`Request blocked by Gemini: ${data.promptFeedback.blockReason}.`);
+  const content = data.candidates?.[0]?.content;
+  if (!content) throw new Error("Gemini returned no content.");
+  return content;
+}
+
+// Stream a model turn token-by-token via SSE (expo/fetch). Emits text deltas to
+// onToken and returns the full Content (text + any functionCalls). Throws to let
+// the caller fall back to the non-streaming path if streaming isn't usable.
+async function streamModelTurn(
+  contents: Content[],
+  systemInstruction: Content,
+  signal: AbortSignal | undefined,
+  onToken?: (full: string) => void
+): Promise<Content> {
+  if (typeof TextDecoder === "undefined") throw new Error("STREAM_UNSUPPORTED");
+  const apiKey = await getGeminiKey();
+  if (!apiKey) throw new Error("No Gemini API key. Add it in Settings.");
+  const model = (await getModel()) || DEFAULT_MODEL;
+  const url = `${GEMINI_BASE}${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+  const body = JSON.stringify({ contents, tools: TOOLS, systemInstruction });
+
+  const res = await expoFetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    signal,
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Stream failed (${res.status}). ${t.slice(0, 200)}`);
+  }
+  const reader = res.body?.getReader?.();
+  if (!reader) throw new Error("STREAM_UNSUPPORTED");
+
+  const decoder = new TextDecoder();
+  let buf = "";
+  let textAcc = "";
+  let chunks = 0;
+  const calls: Part[] = [];
+
+  const consume = (jsonStr: string) => {
+    let data: GeminiResponse;
+    try {
+      data = JSON.parse(jsonStr);
+    } catch {
+      return;
+    }
+    const parts = data.candidates?.[0]?.content?.parts ?? [];
+    for (const p of parts) {
+      if (typeof p.text === "string") {
+        chunks += 1;
+        textAcc += p.text;
+        onToken?.(textAcc);
+      }
+      if (p.functionCall) calls.push({ functionCall: p.functionCall });
+    }
+  };
+
+  while (true) {
+    if (signal?.aborted) {
+      try {
+        await reader.cancel();
+      } catch {
+        // ignore
+      }
+      throw new AbortedError();
+    }
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line.startsWith("data:")) consume(line.slice(5).trim());
+    }
+  }
+
+  void chunks;
+  const finalParts: Part[] = [];
+  if (textAcc) finalParts.push({ text: textAcc });
+  finalParts.push(...calls);
+  return { role: "model", parts: finalParts.length ? finalParts : [{ text: "" }] };
 }
 
 function functionCallsIn(content: Content): FunctionCall[] {
@@ -524,6 +602,8 @@ function textIn(content: Content): string {
 
 export interface AgentCallbacks {
   onStatus?: (status: string | null) => void;
+  // Live token stream of the model's text for the current turn (full text so far).
+  onToken?: (fullText: string) => void;
   // Abort the whole turn (Stop button).
   signal?: AbortSignal;
   // Ask the user before a state-changing API call (POST/PUT/PATCH/DELETE).
@@ -623,7 +703,17 @@ export async function runAgentTurn(
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (signal?.aborted) throw new AbortedError();
     setStatus("Thinking...");
-    const modelTurn = await callGemini(history, systemInstruction, signal);
+    // Prefer streaming; fall back to the (retrying) non-streaming call if the
+    // device/network can't stream.
+    let modelTurn: Content;
+    try {
+      modelTurn = await streamModelTurn(history, systemInstruction, signal, callbacks.onToken);
+    } catch (err) {
+      if (err instanceof AbortedError) throw err;
+      // Don't fire a 2nd request for rate-limit/quota errors — it wastes more quota.
+      if (/\b429\b|quota|RESOURCE_EXHAUSTED|rate.?limit/i.test(String(err))) throw err;
+      modelTurn = await callGemini(history, systemInstruction, signal);
+    }
     history.push(modelTurn);
 
     const calls = functionCallsIn(modelTurn);

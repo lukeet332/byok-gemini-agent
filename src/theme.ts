@@ -7,7 +7,8 @@ export const theme = {
   text: "#e6edf3",
   textDim: "#8b99a7",
   accent: "#39ff14", // neon green
-  userBubble: "#1f6feb",
-  modelBubble: "#1d2630",
+  userBubble: "#1f3a24", // deep green — on-theme, easy on the eyes
+  userBubbleText: "#eaffe6", // soft green-white, high contrast on the green
+  modelBubble: "#161b22", // near-black card, blends with the bg
   danger: "#ff5c5c",
 } as const;

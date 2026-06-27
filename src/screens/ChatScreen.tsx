@@ -14,6 +14,7 @@ import {
   KeyboardAvoidingView,
   ListRenderItemInfo,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -28,7 +29,7 @@ import {
   useSpeechRecognitionEvent,
 } from "expo-speech-recognition";
 
-import { AbortedError, compactConversation, runAgentTurn, suggestTitle } from "../agent/GeminiAgent";
+import { AbortedError, compactConversation, runAgentTurn } from "../agent/GeminiAgent";
 import {
   COMPACT_THRESHOLD_CHARS,
   KEEP_RECENT_TURNS,
@@ -42,6 +43,14 @@ import { theme } from "../theme";
 
 let seq = 0;
 const nextId = () => `${Date.now()}-${++seq}`;
+
+// Derive a thread title locally (no API call) from the first user message.
+function deriveTitle(text: string): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  const words = clean.split(" ").slice(0, 7).join(" ");
+  const t = words.length > 48 ? words.slice(0, 48).trim() + "…" : words;
+  return t.replace(/[.?!,;:]+$/, "") || "New chat";
+}
 
 // Does a turn carry user-visible text (vs. a pure tool call/result)?
 function turnText(c: Content): string {
@@ -107,7 +116,36 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  // Streaming: targetRef holds the full text so far; `displayed` is the smoothly
+  // revealed substring (animated char-by-char by a ticker).
+  const [displayed, setDisplayed] = useState("");
+  const targetRef = useRef("");
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
+
+  function ensureTicker() {
+    if (tickRef.current) return;
+    tickRef.current = setInterval(() => {
+      setDisplayed((d) => {
+        const t = targetRef.current;
+        if (d.length >= t.length) return d; // caught up → no re-render
+        const step = Math.max(2, Math.ceil((t.length - d.length) / 5));
+        return t.slice(0, d.length + step);
+      });
+    }, 16);
+  }
+  function stopTicker() {
+    if (tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
+  }
+  function resetStream() {
+    stopTicker();
+    targetRef.current = "";
+    setDisplayed("");
+  }
+  useEffect(() => stopTicker, []);
   const abortRef = useRef<AbortController | null>(null);
   const bgAbortRef = useRef(false);
   const busyRef = useRef(false);
@@ -220,9 +258,14 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
   }
 
-  function pushMessage(role: ChatMessage["role"], text: string, action?: ChatMessage["action"]): string {
+  function pushMessage(
+    role: ChatMessage["role"],
+    text: string,
+    action?: ChatMessage["action"],
+    canRetry?: boolean
+  ): string {
     const id = nextId();
-    setMessages((prev) => [...prev, { id, role, text, action }]);
+    setMessages((prev) => [...prev, { id, role, text, action, canRetry }]);
     scrollToEnd();
     return id;
   }
@@ -230,35 +273,50 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   async function handleSendMessage(userPrompt: string) {
     const prompt = userPrompt.trim();
     if (!prompt || busy || !thread) return;
-
     const wasVoice = voiceInputRef.current;
     voiceInputRef.current = false;
     setInput("");
-    setBusy(true);
     pushMessage("user", prompt);
-
     const isFirst = thread.contents.length === 0;
     const nextContents: Content[] = [...thread.contents, { role: "user", parts: [{ text: prompt }] }];
+    await runTurn(nextContents, wasVoice, isFirst ? prompt : null);
+  }
 
+  // Re-run the last turn on the existing history (which already ends with the
+  // user's message from the failed attempt) — no extra user bubble, no new request
+  // until the user asks.
+  async function retryLastTurn() {
+    if (!thread || busy) return;
+    setMessages((prev) => prev.filter((m) => !m.canRetry)); // drop the error notice
+    await runTurn(thread.contents, false, null);
+  }
+
+  async function runTurn(contents: Content[], wasVoice: boolean, titleFrom: string | null) {
+    if (!thread) return;
+    setBusy(true);
     const controller = new AbortController();
     abortRef.current = controller;
     bgAbortRef.current = false;
-
     try {
       const result = await runAgentTurn(
-        nextContents,
-        { onStatus: setStatus, signal: controller.signal, confirmWrite },
+        contents,
+        {
+          onStatus: (s) => {
+            setStatus(s);
+            if (s === "Thinking...") resetStream();
+          },
+          onToken: (full) => {
+            targetRef.current = full;
+            ensureTicker();
+          },
+          signal: controller.signal,
+          confirmWrite,
+        },
         thread.memo,
         { threadId: thread.id, threadTitle: thread.title }
       );
 
-      let updated: Thread = {
-        ...thread,
-        contents: result.contents,
-        updatedAt: Date.now(),
-      };
-
-      // Compact older turns into the dense memo if the history is getting big.
+      let updated: Thread = { ...thread, contents: result.contents, updatedAt: Date.now() };
       if (historySize(updated.contents) > COMPACT_THRESHOLD_CHARS) {
         const split = safeSplit(updated.contents);
         if (split > 0) {
@@ -267,17 +325,14 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
           updated = { ...updated, memo, contents: updated.contents.slice(split) };
         }
       }
-
-      // Auto-title a brand-new thread from its first message.
-      if (isFirst) {
-        updated.title = await suggestTitle(prompt);
-      }
+      if (titleFrom) updated.title = deriveTitle(titleFrom);
 
       setThread(updated);
       await saveThread(updated);
       onThreadChanged();
+      resetStream();
       const replyId = pushMessage("model", result.reply);
-      if (wasVoice) startSpeak(replyId, result.reply); // spoke the question → speak the answer
+      if (wasVoice) startSpeak(replyId, result.reply);
     } catch (err) {
       const aborted = err instanceof AbortedError || (err as Error)?.name === "AbortedError";
       if (aborted) {
@@ -288,15 +343,16 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
             : "Stopped."
         );
       } else {
-        pushMessage("model", `Error: ${String(err instanceof Error ? err.message : err)}`);
+        // Surface the error with a manual retry (no auto-retry — saves quota).
+        pushMessage("model", String(err instanceof Error ? err.message : err), undefined, true);
       }
-      // Persist the user turn so a retry keeps context.
-      const updated = { ...thread, contents: nextContents, updatedAt: Date.now() };
+      const updated = { ...thread, contents, updatedAt: Date.now() };
       setThread(updated);
       await saveThread(updated);
       onThreadChanged();
     } finally {
       abortRef.current = null;
+      resetStream();
       setStatus(null);
       setBusy(false);
     }
@@ -308,6 +364,17 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
         <TouchableOpacity style={styles.notice} onPress={onOpenSettings}>
           <Text style={styles.noticeText}>{item.text}</Text>
         </TouchableOpacity>
+      );
+    }
+    if (item.canRetry) {
+      return (
+        <View style={[styles.bubble, styles.errorBubble, styles.alignLeft]}>
+          <Text style={styles.errorText}>{item.text}</Text>
+          <TouchableOpacity style={styles.retryRow} onPress={retryLastTurn} disabled={busy} hitSlop={8}>
+            <Ionicons name="reload" size={16} color={theme.accent} />
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
       );
     }
     const isUser = item.role === "user";
@@ -353,9 +420,16 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
         data={messages}
         keyExtractor={(m) => m.id}
         renderItem={renderItem}
-        extraData={speakingId}
+        extraData={`${speakingId}|${busy}`}
         contentContainerStyle={styles.listContent}
         onContentSizeChange={scrollToEnd}
+        ListFooterComponent={
+          displayed !== "" ? (
+            <View style={[styles.bubble, styles.modelBubble, styles.alignLeft]}>
+              <Text style={styles.modelText}>{displayed}</Text>
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>{thread.title}</Text>
@@ -425,6 +499,17 @@ const mdRules = {
       resizeMode="contain"
     />
   ),
+  // Code blocks scroll horizontally so long lines don't overflow or wrap ugly.
+  fence: (node: { key: string; content: string }) => (
+    <ScrollView key={node.key} horizontal showsHorizontalScrollIndicator={false} style={styles.codeBlock} contentContainerStyle={styles.codeBlockInner}>
+      <Text style={styles.codeText}>{node.content}</Text>
+    </ScrollView>
+  ),
+  code_block: (node: { key: string; content: string }) => (
+    <ScrollView key={node.key} horizontal showsHorizontalScrollIndicator={false} style={styles.codeBlock} contentContainerStyle={styles.codeBlockInner}>
+      <Text style={styles.codeText}>{node.content}</Text>
+    </ScrollView>
+  ),
 };
 
 const styles = StyleSheet.create({
@@ -434,12 +519,20 @@ const styles = StyleSheet.create({
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   emptyTitle: { color: theme.text, fontSize: 20, fontWeight: "700", marginBottom: 8, textAlign: "center" },
   emptyHint: { color: theme.textDim, fontSize: 14, textAlign: "center", lineHeight: 20 },
-  bubble: { maxWidth: "86%", borderRadius: 16, paddingHorizontal: 14, paddingVertical: 8, marginVertical: 5 },
+  bubble: { maxWidth: "86%", borderRadius: 16, paddingHorizontal: 14, paddingVertical: 8, marginVertical: 5, overflow: "hidden" },
+  codeBlock: { backgroundColor: theme.surfaceAlt, borderRadius: 8, marginVertical: 6, maxWidth: "100%" },
+  codeBlockInner: { padding: 10 },
+  codeText: { color: theme.text, fontSize: 13, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
   alignRight: { alignSelf: "flex-end", borderBottomRightRadius: 4 },
   alignLeft: { alignSelf: "flex-start", borderBottomLeftRadius: 4 },
   userBubble: { backgroundColor: theme.userBubble, paddingVertical: 10 },
   modelBubble: { backgroundColor: theme.modelBubble, borderWidth: 1, borderColor: theme.border },
-  userText: { color: "#ffffff", fontSize: 15, lineHeight: 21 },
+  userText: { color: theme.userBubbleText, fontSize: 15, lineHeight: 21 },
+  modelText: { color: theme.text, fontSize: 15, lineHeight: 21 },
+  errorBubble: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.danger },
+  errorText: { color: theme.text, fontSize: 14, lineHeight: 20 },
+  retryRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, alignSelf: "flex-start" },
+  retryText: { color: theme.accent, fontWeight: "700", fontSize: 13 },
   mdImage: { width: "100%", height: 220, marginVertical: 8, borderRadius: 10 },
   notice: {
     alignSelf: "center",
@@ -481,7 +574,7 @@ const styles = StyleSheet.create({
   stopBtn: { backgroundColor: theme.danger },
   micActive: { backgroundColor: theme.danger },
   keepOpen: { color: theme.textDim, fontSize: 11, textAlign: "center", paddingHorizontal: 16, paddingBottom: 4 },
-  speakBtn: { alignSelf: "flex-start", marginTop: 6 },
+  speakBtn: { alignSelf: "flex-end", marginTop: 6 },
 });
 
 // Dark-theme markdown styling for model replies.
@@ -495,7 +588,13 @@ const mdStyles = StyleSheet.create({
   link: { color: theme.accent, textDecorationLine: "underline" },
   bullet_list: { marginVertical: 4 },
   ordered_list: { marginVertical: 4 },
-  list_item: { color: theme.text },
+  // list_item is a row [marker][content]; the content MUST flex or each
+  // character wraps to its own line and the bubble collapses.
+  list_item: { flexDirection: "row", justifyContent: "flex-start", marginVertical: 2 },
+  bullet_list_icon: { color: theme.accent, marginRight: 6 },
+  ordered_list_icon: { color: theme.accent, marginRight: 6 },
+  bullet_list_content: { flex: 1, color: theme.text },
+  ordered_list_content: { flex: 1, color: theme.text },
   code_inline: {
     color: theme.accent,
     backgroundColor: theme.surfaceAlt,
