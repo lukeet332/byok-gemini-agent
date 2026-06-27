@@ -44,6 +44,21 @@ import { theme } from "../theme";
 let seq = 0;
 const nextId = () => `${Date.now()}-${++seq}`;
 
+// Should a message sent mid-task INTERRUPT the running turn, or queue after it?
+// Replicates "gauge priority" cheaply (no API call): clear redirect/cancel cues
+// override now; everything else queues to run when the current turn finishes.
+function isInterrupt(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  return /^(stop|wait|hold on|no\b|nope|cancel|abort|actually|instead|forget|never ?mind|scratch that|hang on|hold up)/.test(
+    t
+  );
+}
+
+interface Queued {
+  prompt: string;
+  wasVoice: boolean;
+}
+
 // Derive a thread title locally (no API call) from the first user message.
 function deriveTitle(text: string): string {
   const clean = text.replace(/\s+/g, " ").trim();
@@ -151,6 +166,15 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   const busyRef = useRef(false);
   // True when the pending message was dictated (so we read the reply aloud).
   const voiceInputRef = useRef(false);
+  // Messages sent while a turn is running queue here; runningRef gates the single
+  // runner; interruptRef marks an abort that should immediately run the queue.
+  const queueRef = useRef<Queued[]>([]);
+  const runningRef = useRef(false);
+  const interruptRef = useRef(false);
+  const [queuedCount, setQueuedCount] = useState(0);
+  // Authoritative, synchronously-updated history (setThread lags across the
+  // rapid abort -> drain chain, so queued turns build on this instead).
+  const liveContentsRef = useRef<Content[]>([]);
 
   // Keep a ref in sync so AppState/back handlers see the latest busy state.
   useEffect(() => {
@@ -247,6 +271,9 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
       const loaded = (await loadThread(threadId)) ?? newThread(Date.now(), threadId);
       if (!active) return;
       setThread(loaded);
+      liveContentsRef.current = loaded.contents;
+      queueRef.current = [];
+      setQueuedCount(0);
       setMessages(toMessages(loaded.contents));
     })();
     return () => {
@@ -270,29 +297,52 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     return id;
   }
 
-  async function handleSendMessage(userPrompt: string) {
+  function handleSendMessage(userPrompt: string) {
     const prompt = userPrompt.trim();
-    if (!prompt || busy || !thread) return;
+    if (!prompt || !thread) return;
     const wasVoice = voiceInputRef.current;
     voiceInputRef.current = false;
     setInput("");
-    pushMessage("user", prompt);
-    const isFirst = thread.contents.length === 0;
-    const nextContents: Content[] = [...thread.contents, { role: "user", parts: [{ text: prompt }] }];
-    await runTurn(nextContents, wasVoice, isFirst ? prompt : null);
+    pushMessage("user", prompt); // show it immediately
+
+    queueRef.current.push({ prompt, wasVoice });
+    setQueuedCount(queueRef.current.length);
+
+    if (runningRef.current) {
+      // A turn is in flight: interrupt now if it's a redirect, else let it queue.
+      if (isInterrupt(prompt)) {
+        interruptRef.current = true;
+        abortRef.current?.abort();
+      }
+    } else {
+      drainQueue();
+    }
+  }
+
+  // Run the next queued message (single runner gated by runningRef).
+  function drainQueue() {
+    if (runningRef.current || !thread) return;
+    const next = queueRef.current.shift();
+    setQueuedCount(queueRef.current.length);
+    if (!next) return;
+    const base = liveContentsRef.current;
+    const isFirst = base.length === 0;
+    const nextContents: Content[] = [...base, { role: "user", parts: [{ text: next.prompt }] }];
+    void runTurn(nextContents, next.wasVoice, isFirst ? next.prompt : null);
   }
 
   // Re-run the last turn on the existing history (which already ends with the
   // user's message from the failed attempt) — no extra user bubble, no new request
   // until the user asks.
   async function retryLastTurn() {
-    if (!thread || busy) return;
+    if (!thread || runningRef.current) return;
     setMessages((prev) => prev.filter((m) => !m.canRetry)); // drop the error notice
     await runTurn(thread.contents, false, null);
   }
 
   async function runTurn(contents: Content[], wasVoice: boolean, titleFrom: string | null) {
     if (!thread) return;
+    runningRef.current = true;
     setBusy(true);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -327,6 +377,7 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
       }
       if (titleFrom) updated.title = deriveTitle(titleFrom);
 
+      liveContentsRef.current = updated.contents;
       setThread(updated);
       await saveThread(updated);
       onThreadChanged();
@@ -335,7 +386,10 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
       if (wasVoice) startSpeak(replyId, result.reply);
     } catch (err) {
       const aborted = err instanceof AbortedError || (err as Error)?.name === "AbortedError";
-      if (aborted) {
+      if (interruptRef.current) {
+        // Aborted to immediately run a redirect message — no "Stopped" notice.
+        interruptRef.current = false;
+      } else if (aborted) {
         pushMessage(
           "model",
           bgAbortRef.current
@@ -347,14 +401,17 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
         pushMessage("model", String(err instanceof Error ? err.message : err), undefined, true);
       }
       const updated = { ...thread, contents, updatedAt: Date.now() };
+      liveContentsRef.current = contents;
       setThread(updated);
       await saveThread(updated);
       onThreadChanged();
     } finally {
       abortRef.current = null;
+      runningRef.current = false;
       resetStream();
       setStatus(null);
       setBusy(false);
+      drainQueue(); // run the next queued / interrupting message, if any
     }
   }
 
@@ -445,11 +502,15 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
           <ActivityIndicator size="small" color={theme.accent} />
           <Text style={styles.statusText} numberOfLines={1}>
             {status}
+            {queuedCount > 0 ? `  ·  ${queuedCount} queued` : ""}
           </Text>
+          <TouchableOpacity onPress={() => abortRef.current?.abort()} hitSlop={8}>
+            <Ionicons name="stop-circle" size={24} color={theme.danger} />
+          </TouchableOpacity>
         </View>
       ) : null}
 
-      {busy ? <Text style={styles.keepOpen}>Keep Fraude open — leaving cancels this task.</Text> : null}
+      {busy ? <Text style={styles.keepOpen}>Keep Fraude open — leaving cancels this task. Send more to queue them.</Text> : null}
 
       <View style={styles.inputBar}>
         <TextInput
@@ -459,10 +520,9 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
             setInput(t);
             voiceInputRef.current = false; // typed → don't auto-speak the reply
           }}
-          placeholder={listening ? "Listening…" : "Message"}
+          placeholder={listening ? "Listening…" : busy ? "Queue another message…" : "Message"}
           placeholderTextColor={theme.textDim}
           multiline
-          editable={!busy}
         />
         <TouchableOpacity
           style={[styles.iconBtn, listening ? styles.micActive : styles.iconBtnGhost]}
@@ -471,19 +531,13 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
         >
           <Ionicons name={listening ? "stop" : "mic"} size={22} color={listening ? "#fff" : theme.accent} />
         </TouchableOpacity>
-        {busy ? (
-          <TouchableOpacity style={[styles.iconBtn, styles.stopBtn]} onPress={() => abortRef.current?.abort()}>
-            <Ionicons name="square" size={18} color="#fff" />
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={[styles.iconBtn, styles.sendBtn, !input.trim() && styles.sendBtnDisabled]}
-            onPress={() => handleSendMessage(input)}
-            disabled={!input.trim()}
-          >
-            <Ionicons name="arrow-up" size={22} color={theme.bg} />
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity
+          style={[styles.iconBtn, styles.sendBtn, !input.trim() && styles.sendBtnDisabled]}
+          onPress={() => handleSendMessage(input)}
+          disabled={!input.trim()}
+        >
+          <Ionicons name="arrow-up" size={22} color={theme.bg} />
+        </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
   );
