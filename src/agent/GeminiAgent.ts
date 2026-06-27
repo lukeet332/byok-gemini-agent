@@ -20,6 +20,12 @@ import {
   getSecretValue,
   getSystemPrompt,
   listSecretNames,
+  saveBackgroundRun,
+  saveModel,
+  saveProvider,
+  saveWriteMode,
+  AiProvider,
+  GitWriteMode,
 } from "../storage/SecureStorage";
 import { appendError } from "../storage/ErrorLogStore";
 import { getUserNotes, saveUserNotes } from "../storage/UserNotes";
@@ -115,7 +121,8 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "- If a tool fails, read the error, adjust (different URL, headers, or query) and retry a couple of times before giving up.",
   "- BE HONEST — NEVER GUESS OR LIE. Do not fabricate success, data, results, prices, quotes, or sources. If, after genuinely using your tools, you still cannot verify a fact or complete an action (a site blocks access, an app can't be driven silently, a file is binary), say so plainly — a truthful 'I searched but couldn't confirm X' or 'I couldn't do X because Y' is ALWAYS better than a confident made-up answer.",
   "- For app handoffs prefer standard intents/deep links: ACTION_SENDTO (smsto:/mailto:), ACTION_SEND, ACTION_INSERT (calendar/contacts), ACTION_VIEW, ACTION_DIAL. Remember these open the target app; truly background actions are only possible via an API (http_request).",
-  "- REMEMBER LASTING PREFERENCES. If the user asks you to always do something — a tone/voice (formal, casual, blunt), length (brief), format, language, or any standing instruction or fact to remember — immediately save it with update_user_notes so it persists across all future chats. Don't save one-off requests.",
+  "- REMEMBER LASTING PREFERENCES. If the user asks you to always do something — a tone/voice (formal, casual, blunt), length (brief), format, language, or any standing instruction or fact to remember — immediately save it with update_user_notes so it persists across all future chats. Don't save one-off requests. (Behaviour/persona lives in user notes, NOT in your own instructions.)",
+  "- CHANGE APP SETTINGS ON REQUEST. If the user asks to change a setting, use update_setting (key = model | provider | background | write_mode). It asks them to confirm. You can't set API keys/secrets; behaviour/tone goes to update_user_notes, not here.",
   "- Be concise and direct. Use markdown. Include relevant image URLs so they render inline.",
 ].join("\n");
 
@@ -317,6 +324,26 @@ export const TOOLS: Tool[] = [
         },
       },
       {
+        name: "update_setting",
+        description:
+          "Change one of the user's app settings (requires their confirmation). Allowed keys: " +
+          "'model' (the model id for the current provider, e.g. gemini-2.5-flash), " +
+          "'provider' (gemini | anthropic | openai — only switch to one whose key is already set), " +
+          "'background' (on | off — keep a task running when the app is backgrounded), " +
+          "'write_mode' (pr | branch | main — how your GitHub changes land). " +
+          "You CANNOT set API keys or secret values, and you must NOT change your own agent " +
+          "instructions here — for tone/behaviour/standing preferences use update_user_notes instead. " +
+          "Use this only when the user explicitly asks to change one of these settings.",
+        parameters: {
+          type: "object",
+          properties: {
+            key: { type: "string", description: "One of: model, provider, background, write_mode." },
+            value: { type: "string", description: "The new value for that setting." },
+          },
+          required: ["key", "value"],
+        },
+      },
+      {
         name: "github_list_path",
         description:
           "List a directory in a GitHub repo (or report a path is a file) to navigate a codebase. repo is 'owner/name'.",
@@ -444,6 +471,37 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
   update_user_notes: async (args) => {
     await saveUserNotes(String(args.notes ?? ""));
     return { ok: true };
+  },
+  update_setting: async (args) => {
+    const key = String(args.key ?? "").trim().toLowerCase();
+    const value = String(args.value ?? "").trim();
+    switch (key) {
+      case "model":
+        if (!value) return { ok: false, error: "Provide a model id." };
+        await saveModel(value);
+        return { ok: true, key, value, note: "Applies to your next message." };
+      case "provider": {
+        const p = value.toLowerCase();
+        if (p !== "gemini" && p !== "anthropic" && p !== "openai")
+          return { ok: false, error: "provider must be gemini, anthropic, or openai." };
+        await saveProvider(p as AiProvider);
+        return { ok: true, key, value: p, note: "Only works if that provider's key is set in Settings." };
+      }
+      case "background": {
+        const on = /^(on|true|1|yes|enable|enabled)$/.test(value.toLowerCase());
+        await saveBackgroundRun(on);
+        return { ok: true, key, value: on ? "on" : "off", note: "Background toggle fully applies next time you open the app." };
+      }
+      case "write_mode": {
+        const m = value.toLowerCase();
+        if (m !== "pr" && m !== "branch" && m !== "main")
+          return { ok: false, error: "write_mode must be pr, branch, or main." };
+        await saveWriteMode(m as GitWriteMode);
+        return { ok: true, key, value: m };
+      }
+      default:
+        return { ok: false, error: "Unknown setting. Allowed: model, provider, background, write_mode." };
+    }
   },
   github_list_path: (args) =>
     Github.listPath(String(args.repo ?? ""), typeof args.path === "string" ? args.path : "", typeof args.ref === "string" ? args.ref : undefined),
@@ -1112,6 +1170,7 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "pick_file") return "Waiting for file pick...";
   if (call.name === "write_file" || call.name === "create_file") return "Writing file...";
   if (call.name === "update_user_notes") return "Updating your notes...";
+  if (call.name === "update_setting") return `Updating setting: ${String(call.args?.key ?? "")}`;
   if (call.name === "github_list_path" || call.name === "github_get_file") return `Reading repo: ${String(call.args?.repo ?? "")}`;
   if (call.name === "github_search_code") return "Searching code...";
   if (call.name === "github_commit") return `Committing to ${String(call.args?.repo ?? "")}...`;
@@ -1191,6 +1250,10 @@ export async function runAgentTurn(
           needsConfirm = true;
           confirmMethod = "FILE";
           confirmUrl = String(a.uri ?? a.name ?? "a file");
+        } else if (call.name === "update_setting") {
+          needsConfirm = true;
+          confirmMethod = "SETTING";
+          confirmUrl = `${String(a.key ?? "")} → ${String(a.value ?? "")}`;
         } else if (call.name === "github_commit") {
           needsConfirm = true;
           confirmMethod = "COMMIT";
