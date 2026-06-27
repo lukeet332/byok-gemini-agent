@@ -12,6 +12,7 @@ import { getGeminiKey, getModel, getSecretValue, getSystemPrompt, listSecretName
 import { appendError } from "../storage/ErrorLogStore";
 import { BrowserEngine } from "../browser/BrowserEngine";
 import * as Device from "../device/DeviceTools";
+import * as Files from "../device/FileTools";
 
 // Default model + the presets offered in Settings. Users can also type any
 // model id (e.g. a newer one) as a custom value.
@@ -80,6 +81,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "- fetch_webpage(url): read a specific page as clean text.",
   "- http_request(method,url,headers,body): call ANY API. Authenticate by putting {{SECRET_NAME}} in the url/headers/body — values are substituted on-device; you never see them.",
   "- Device / other apps: check_app_available(url-or-scheme), open_link(url or deep link), share_content(text), clipboard_get(), clipboard_set(text), send_android_intent(...).",
+  "- Files: grant_folder (one-time per folder), list_files(folderUri?), read_file(uri), write_file(uri,content), create_file(folderUri,name,content), pick_file. To find/edit a file in e.g. Downloads: list_files() to see granted folders; if none, call grant_folder and ask the user to pick Downloads; then list_files(uri), read_file, and write_file/create_file as needed.",
   "",
   "Acting on the phone: to use another app (e.g. send a WhatsApp message), FIRST check_app_available (e.g. 'whatsapp://'), then format that app's deep link yourself (e.g. https://wa.me/<number>?text=...) and open_link it, or use send_android_intent for advanced handoffs. Use clipboard_set to hand the user text to paste anywhere.",
   "",
@@ -88,6 +90,8 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "- Chain steps: search -> open the most relevant pages -> extract what matters -> (optionally call APIs) -> synthesise.",
   "- Verify before asserting. Prefer primary sources; cite the URLs you used.",
   "- If a tool fails, read the error, adjust (different URL, headers, or query) and retry a couple of times before giving up.",
+  "- BE HONEST ABOUT FAILURE. Never fabricate success, data, or results. If a tool keeps failing, or something simply isn't possible on this device (e.g. an app can't be driven silently, a site blocks access, a file is binary), tell the user plainly WHAT failed and WHY, and suggest an alternative if one exists. A clear 'I couldn't do X because Y' is always better than a made-up answer.",
+  "- For app handoffs prefer standard intents/deep links: ACTION_SENDTO (smsto:/mailto:), ACTION_SEND, ACTION_INSERT (calendar/contacts), ACTION_VIEW, ACTION_DIAL. Remember these open the target app; truly background actions are only possible via an API (http_request).",
   "- Be concise and direct. Use markdown. Include relevant image URLs so they render inline.",
 ].join("\n");
 
@@ -217,6 +221,64 @@ export const TOOLS: Tool[] = [
           required: ["action"],
         },
       },
+      {
+        name: "grant_folder",
+        description:
+          "Ask the user to grant access to a folder (e.g. Downloads) via the system " +
+          "picker. Needed once before you can list/read that folder's files. Returns " +
+          "the folder uri to use with list_files.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        name: "list_files",
+        description:
+          "List files. With no folderUri, returns the folders the user has already " +
+          "granted. With a granted folderUri, returns the files inside it (name + uri).",
+        parameters: {
+          type: "object",
+          properties: { folderUri: { type: "string", description: "A previously-granted folder uri (optional)." } },
+        },
+      },
+      {
+        name: "read_file",
+        description: "Read a text file's content by uri (from a granted folder or a picked file).",
+        parameters: {
+          type: "object",
+          properties: { uri: { type: "string", description: "The file uri to read." } },
+          required: ["uri"],
+        },
+      },
+      {
+        name: "pick_file",
+        description: "Ask the user to pick a single file to hand to you (returns its name + uri).",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        name: "write_file",
+        description: "Overwrite an existing text file's content by uri (from a granted folder or picked file).",
+        parameters: {
+          type: "object",
+          properties: {
+            uri: { type: "string", description: "The file uri to overwrite." },
+            content: { type: "string", description: "The new full text content." },
+          },
+          required: ["uri", "content"],
+        },
+      },
+      {
+        name: "create_file",
+        description: "Create a new text file inside a granted folder.",
+        parameters: {
+          type: "object",
+          properties: {
+            folderUri: { type: "string", description: "A granted folder uri." },
+            name: { type: "string", description: "New file name, e.g. notes.txt." },
+            content: { type: "string", description: "The file's text content." },
+            mimeType: { type: "string", description: "Optional MIME type (default text/plain)." },
+          },
+          required: ["folderUri", "name", "content"],
+        },
+      },
     ],
   },
 ];
@@ -258,6 +320,18 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
       packageName: typeof args.package === "string" ? args.package : undefined,
       text: typeof args.text === "string" ? args.text : undefined,
     }),
+  grant_folder: () => Files.grantFolder(),
+  list_files: (args) => Files.listFiles(typeof args.folderUri === "string" ? args.folderUri : undefined),
+  read_file: (args) => Files.readFile(String(args.uri ?? "")),
+  pick_file: () => Files.pickFile(),
+  write_file: (args) => Files.writeFile(String(args.uri ?? ""), String(args.content ?? "")),
+  create_file: (args) =>
+    Files.createFile(
+      String(args.folderUri ?? ""),
+      String(args.name ?? ""),
+      String(args.content ?? ""),
+      typeof args.mimeType === "string" ? args.mimeType : undefined
+    ),
 };
 
 // Stored secret values, used to scrub anything echoed back into the model/logs.
@@ -523,6 +597,11 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "clipboard_get") return "Reading clipboard...";
   if (call.name === "clipboard_set") return "Copying to clipboard...";
   if (call.name === "send_android_intent") return `Handing off to app: ${String(call.args?.package ?? call.args?.action ?? "")}`;
+  if (call.name === "grant_folder") return "Requesting folder access...";
+  if (call.name === "list_files") return "Listing files...";
+  if (call.name === "read_file") return "Reading file...";
+  if (call.name === "pick_file") return "Waiting for file pick...";
+  if (call.name === "write_file" || call.name === "create_file") return "Writing file...";
   return `Running tool: ${call.name}...`;
 }
 
@@ -566,13 +645,16 @@ export async function runAgentTurn(
         const method = String(call.args?.method ?? "GET").toUpperCase();
         const isHttpWrite = call.name === "http_request" && WRITE_METHODS.has(method);
         const isIntent = call.name === "send_android_intent";
-        const needsConfirm = isHttpWrite || isIntent;
-        const confirmMethod = isIntent ? "INTENT" : method;
+        const isFileWrite = call.name === "write_file" || call.name === "create_file";
+        const needsConfirm = isHttpWrite || isIntent || isFileWrite;
+        const confirmMethod = isIntent ? "INTENT" : isFileWrite ? "FILE" : method;
         const confirmUrl = isIntent
           ? `${String(call.args?.action ?? "")} ${String(call.args?.package ?? "")}`.trim()
-          : typeof call.args?.url === "string"
-            ? (call.args.url as string)
-            : "";
+          : isFileWrite
+            ? String(call.args?.uri ?? call.args?.name ?? "a file")
+            : typeof call.args?.url === "string"
+              ? (call.args.url as string)
+              : "";
         if (needsConfirm && callbacks.confirmWrite && !(await callbacks.confirmWrite({ method: confirmMethod, url: confirmUrl }))) {
           result = { ok: false, error: "The user declined this request. Do not retry it; ask them what to do instead." };
         } else {

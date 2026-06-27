@@ -145,7 +145,9 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     const body =
       method === "INTENT"
         ? `The assistant wants to hand off to another app:\n\n${url}\n\nAllow it?`
-        : `The assistant wants to send a ${method} request to:\n\n${url}\n\nThis can change data. Allow it?`;
+        : method === "FILE"
+          ? `The assistant wants to write to a file:\n\n${url}\n\nAllow it?`
+          : `The assistant wants to send a ${method} request to:\n\n${url}\n\nThis can change data. Allow it?`;
     return new Promise((resolve) => {
       Alert.alert("Confirm action", body, [
         { text: "Decline", style: "cancel", onPress: () => resolve(false) },
