@@ -6,6 +6,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
+  AppState,
+  BackHandler,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -24,7 +27,7 @@ import {
   useSpeechRecognitionEvent,
 } from "expo-speech-recognition";
 
-import { compactConversation, runAgentTurn, suggestTitle } from "../agent/GeminiAgent";
+import { AbortedError, compactConversation, runAgentTurn, suggestTitle } from "../agent/GeminiAgent";
 import {
   COMPACT_THRESHOLD_CHARS,
   KEEP_RECENT_TURNS,
@@ -104,6 +107,53 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   const [listening, setListening] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const bgAbortRef = useRef(false);
+  const busyRef = useRef(false);
+
+  // Keep a ref in sync so AppState/back handlers see the latest busy state.
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  // If the app is backgrounded mid-task, the JS engine pauses and the turn can't
+  // continue — abort cleanly and tell the user, rather than hanging forever.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active" && busyRef.current && abortRef.current) {
+        bgAbortRef.current = true;
+        abortRef.current.abort();
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Warn on hardware back while a task is running.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (!busyRef.current) return false;
+      Alert.alert("Task running", "Leaving will cancel the running task. Leave anyway?", [
+        { text: "Stay", style: "cancel" },
+        { text: "Leave & cancel", style: "destructive", onPress: () => abortRef.current?.abort() },
+      ]);
+      return true; // block the default back action
+    });
+    return () => sub.remove();
+  }, []);
+
+  function confirmWrite({ method, url }: { method: string; url: string }): Promise<boolean> {
+    return new Promise((resolve) => {
+      Alert.alert(
+        "Confirm action",
+        `The assistant wants to send a ${method} request to:\n\n${url}\n\nThis can change data. Allow it?`,
+        [
+          { text: "Decline", style: "cancel", onPress: () => resolve(false) },
+          { text: "Allow", onPress: () => resolve(true) },
+        ],
+        { cancelable: false }
+      );
+    });
+  }
 
   // Speech-to-text: stream the transcript into the input box.
   useSpeechRecognitionEvent("result", (e) => {
@@ -176,11 +226,17 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     const isFirst = thread.contents.length === 0;
     const nextContents: Content[] = [...thread.contents, { role: "user", parts: [{ text: prompt }] }];
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+    bgAbortRef.current = false;
+
     try {
-      const result = await runAgentTurn(nextContents, { onStatus: setStatus }, thread.memo, {
-        threadId: thread.id,
-        threadTitle: thread.title,
-      });
+      const result = await runAgentTurn(
+        nextContents,
+        { onStatus: setStatus, signal: controller.signal, confirmWrite },
+        thread.memo,
+        { threadId: thread.id, threadTitle: thread.title }
+      );
 
       let updated: Thread = {
         ...thread,
@@ -215,12 +271,24 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
         );
       }
     } catch (err) {
-      pushMessage("model", `Error: ${String(err instanceof Error ? err.message : err)}`);
+      const aborted = err instanceof AbortedError || (err as Error)?.name === "AbortedError";
+      if (aborted) {
+        pushMessage(
+          "model",
+          bgAbortRef.current
+            ? "Stopped — Fraude was sent to the background. Keep the app open while a task runs."
+            : "Stopped."
+        );
+      } else {
+        pushMessage("model", `Error: ${String(err instanceof Error ? err.message : err)}`);
+      }
+      // Persist the user turn so a retry keeps context.
       const updated = { ...thread, contents: nextContents, updatedAt: Date.now() };
       setThread(updated);
       await saveThread(updated);
       onThreadChanged();
     } finally {
+      abortRef.current = null;
       setStatus(null);
       setBusy(false);
     }
@@ -295,6 +363,8 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
         </View>
       ) : null}
 
+      {busy ? <Text style={styles.keepOpen}>Keep Fraude open — leaving cancels this task.</Text> : null}
+
       <View style={styles.inputBar}>
         <TextInput
           style={styles.input}
@@ -312,13 +382,19 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
         >
           <Text style={styles.micText}>{listening ? "●" : "🎤"}</Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.sendBtn, (busy || !input.trim()) && styles.sendBtnDisabled]}
-          onPress={() => handleSendMessage(input)}
-          disabled={busy || !input.trim()}
-        >
-          <Text style={styles.sendText}>Send</Text>
-        </TouchableOpacity>
+        {busy ? (
+          <TouchableOpacity style={styles.stopBtn} onPress={() => abortRef.current?.abort()}>
+            <Text style={styles.stopText}>■ Stop</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={[styles.sendBtn, !input.trim() && styles.sendBtnDisabled]}
+            onPress={() => handleSendMessage(input)}
+            disabled={!input.trim()}
+          >
+            <Text style={styles.sendText}>Send</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </KeyboardAvoidingView>
   );
@@ -386,6 +462,9 @@ const styles = StyleSheet.create({
   sendBtn: { backgroundColor: theme.accent, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 12, justifyContent: "center" },
   sendBtnDisabled: { opacity: 0.45 },
   sendText: { color: theme.bg, fontWeight: "700", fontSize: 15 },
+  stopBtn: { backgroundColor: theme.danger, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 12, justifyContent: "center" },
+  stopText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  keepOpen: { color: theme.textDim, fontSize: 11, textAlign: "center", paddingHorizontal: 16, paddingBottom: 4 },
   speakBtn: { alignSelf: "flex-start", marginTop: 6 },
   speakText: { color: theme.textDim, fontSize: 12, fontWeight: "600" },
   micBtn: {

@@ -129,6 +129,10 @@ export const TOOLS: Tool[] = [
           type: "object",
           properties: {
             url: { type: "string", description: "Full URL of the page to read, including https://." },
+            offset: {
+              type: "integer",
+              description: "Character offset to start from, for paging past truncation (default 0). Use the offset suggested in a previous truncated result to read more.",
+            },
           },
           required: ["url"],
         },
@@ -183,7 +187,10 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-type ToolExecutor = (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+type ToolExecutor = (
+  args: Record<string, unknown>,
+  signal?: AbortSignal
+) => Promise<Record<string, unknown>>;
 
 const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
   http_request: executeHttpRequest,
@@ -191,13 +198,40 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
   web_search: executeWebSearch,
 };
 
+// Stored secret values, used to scrub anything echoed back into the model/logs.
+async function collectSecretValues(): Promise<string[]> {
+  const names = await listSecretNames();
+  const vals = await Promise.all(names.map(getSecretValue));
+  const jina = await getJinaKey();
+  return [...vals, jina].filter((v): v is string => !!v && v.length >= 4);
+}
+
+function redactString(text: string, secrets: string[]): string {
+  let out = text;
+  for (const s of secrets) out = out.split(s).join("[REDACTED]");
+  return out;
+}
+
+// Redact secret values from the string fields a tool returns to the model.
+function redactResult(result: Record<string, unknown>, secrets: string[]): Record<string, unknown> {
+  if (!secrets.length) return result;
+  const out: Record<string, unknown> = { ...result };
+  for (const k of ["body", "content", "results", "error"]) {
+    if (typeof out[k] === "string") out[k] = redactString(out[k] as string, secrets);
+  }
+  return out;
+}
+
 // Optional Jina auth header to raise free rate limits, if the user stored a key.
 async function jinaHeaders(): Promise<Record<string, string>> {
   const key = await getJinaKey();
   return key ? { Authorization: `Bearer ${key}` } : {};
 }
 
-async function executeHttpRequest(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function executeHttpRequest(
+  args: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<Record<string, unknown>> {
   const method = String(args.method ?? "GET").toUpperCase();
   const rawUrl = typeof args.url === "string" ? args.url : "";
   if (!rawUrl) return { ok: false, error: "Missing url." };
@@ -214,7 +248,7 @@ async function executeHttpRequest(args: Record<string, unknown>): Promise<Record
     }
   }
 
-  const init: RequestInit = { method, headers };
+  const init: RequestInit = { method, headers, signal };
   if (typeof args.body === "string" && args.body.length && method !== "GET" && method !== "HEAD") {
     init.body = await substituteSecrets(args.body);
   }
@@ -234,50 +268,71 @@ async function executeHttpRequest(args: Record<string, unknown>): Promise<Record
 }
 
 // Fetch direct, fall back to stripped HTML. Used if the Jina reader is down.
-async function fetchDirect(url: string): Promise<{ ok: boolean; status: number; text: string }> {
-  const res = await fetch(url, { headers: { ...BROWSER_HEADERS, Accept: "text/html,*/*" } });
+async function fetchDirect(
+  url: string,
+  signal?: AbortSignal
+): Promise<{ ok: boolean; status: number; text: string }> {
+  const res = await fetch(url, { headers: { ...BROWSER_HEADERS, Accept: "text/html,*/*" }, signal });
   const raw = await res.text();
   const looksHtml = /<html|<body|<!doctype/i.test(raw) || (res.headers.get("content-type") ?? "").includes("html");
   return { ok: res.ok, status: res.status, text: looksHtml ? htmlToText(raw) : raw };
 }
 
-async function executeFetchWebpage(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function executeFetchWebpage(
+  args: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<Record<string, unknown>> {
   const url = typeof args.url === "string" ? args.url : "";
   if (!url) return { ok: false, error: "Missing url." };
-  const clip = (t: string) => (t.length > MAX_PAGE_CHARS ? t.slice(0, MAX_PAGE_CHARS) + "\n...[truncated]" : t);
+  // Optional paging so the model can read past the truncation point.
+  const offset = typeof args.offset === "number" && args.offset > 0 ? Math.floor(args.offset) : 0;
+  const page = (t: string) => {
+    const slice = t.slice(offset, offset + MAX_PAGE_CHARS);
+    const more = t.length > offset + MAX_PAGE_CHARS;
+    return more ? slice + `\n...[more — call again with offset ${offset + MAX_PAGE_CHARS}]` : slice;
+  };
 
   // Prefer the JS-rendering reader (handles dynamic, script-heavy pages).
   let rateLimited = false;
   try {
     const res = await fetch(JINA_READER + url, {
       headers: { ...BROWSER_HEADERS, Accept: "text/plain", ...(await jinaHeaders()) },
+      signal,
     });
     const text = await res.text();
     if (res.status === 429) rateLimited = true;
-    else if (res.ok && text.trim()) return { ok: true, status: res.status, url, content: clip(text) };
-  } catch {
-    // fall through to direct
+    else if (res.ok && text.trim()) return { ok: true, status: res.status, url, content: page(text) };
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    // else fall through to direct
   }
 
   // Fallback: direct fetch + HTML strip.
   try {
-    const d = await fetchDirect(url);
-    return { ok: d.ok, status: d.status, url, content: clip(d.text), ...(rateLimited ? { rateLimited: true, provider: "jina" } : {}) };
+    const d = await fetchDirect(url, signal);
+    return { ok: d.ok, status: d.status, url, content: page(d.text), ...(rateLimited ? { rateLimited: true, provider: "jina" } : {}) };
   } catch (err) {
     return { ok: false, error: `Could not fetch page: ${String(err)}`, ...(rateLimited ? { rateLimited: true, provider: "jina" } : {}) };
   }
 }
 
 // Keyless fallback search: DuckDuckGo's no-JS HTML endpoint (titles/snippets/links).
-async function ddgSearch(query: string): Promise<{ ok: boolean; status: number; text: string }> {
+async function ddgSearch(
+  query: string,
+  signal?: AbortSignal
+): Promise<{ ok: boolean; status: number; text: string }> {
   const res = await fetch("https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query), {
     headers: { ...BROWSER_HEADERS, Accept: "text/html,*/*" },
+    signal,
   });
   const raw = await res.text();
   return { ok: res.ok, status: res.status, text: htmlToText(raw) };
 }
 
-async function executeWebSearch(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function executeWebSearch(
+  args: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<Record<string, unknown>> {
   const query = typeof args.query === "string" ? args.query.trim() : "";
   if (!query) return { ok: false, error: "Missing query." };
   const clip = (t: string) => (t.length > MAX_SEARCH_CHARS ? t.slice(0, MAX_SEARCH_CHARS) + "\n...[truncated]" : t);
@@ -287,18 +342,20 @@ async function executeWebSearch(args: Record<string, unknown>): Promise<Record<s
   try {
     const res = await fetch(JINA_SEARCH + encodeURIComponent(query), {
       headers: { ...BROWSER_HEADERS, Accept: "text/plain", ...(await jinaHeaders()) },
+      signal,
     });
     const text = await res.text();
     if (res.status === 429) rateLimited = true;
     else if (res.ok && text.trim()) return { ok: true, status: res.status, query, source: "jina", results: clip(text) };
-  } catch {
-    // fall through to DuckDuckGo
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    // else fall through to DuckDuckGo
   }
 
   // Fallback: DuckDuckGo HTML (keyless, links + snippets).
   const rl = rateLimited ? { rateLimited: true, provider: "jina" } : {};
   try {
-    const d = await ddgSearch(query);
+    const d = await ddgSearch(query, signal);
     if (d.ok && d.text.trim()) return { ok: true, status: d.status, query, source: "duckduckgo", results: clip(d.text), ...rl };
     return { ok: false, status: d.status, error: `Search failed (${d.status}).`, ...rl };
   } catch (err) {
@@ -332,24 +389,49 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
   return { role: "user", parts: [{ text: base + secretsLine + memoBlock }] };
 }
 
-async function callGemini(contents: Content[], systemInstruction: Content): Promise<Content> {
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+// Call Gemini with abort support and retry+backoff on transient errors
+// (rate limits / 5xx), honouring Retry-After when present.
+async function callGemini(
+  contents: Content[],
+  systemInstruction: Content,
+  signal?: AbortSignal,
+  withTools = true
+): Promise<Content> {
   const apiKey = await getGeminiKey();
   if (!apiKey) throw new Error("No Gemini API key. Add it in Settings.");
+  const url = `${await genEndpoint()}?key=${encodeURIComponent(apiKey)}`;
+  const payload: Record<string, unknown> = { contents, systemInstruction };
+  if (withTools) payload.tools = TOOLS;
+  const body = JSON.stringify(payload);
 
-  const res = await fetch(`${await genEndpoint()}?key=${encodeURIComponent(apiKey)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ contents, tools: TOOLS, systemInstruction }),
-  });
-
-  const data = (await res.json().catch(() => ({}))) as GeminiResponse;
-  if (!res.ok) throw new Error(data.error?.message ?? `Gemini request failed (${res.status}).`);
-  if (data.promptFeedback?.blockReason)
-    throw new Error(`Request blocked by Gemini: ${data.promptFeedback.blockReason}.`);
-
-  const content = data.candidates?.[0]?.content;
-  if (!content) throw new Error("Gemini returned no content.");
-  return content;
+  let lastErr = "Gemini request failed.";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (signal?.aborted) throw new AbortedError();
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body, signal });
+    } catch (e) {
+      if (signal?.aborted) throw new AbortedError();
+      lastErr = `Network error: ${String(e)}`;
+      await sleep(700 * (attempt + 1), signal);
+      continue;
+    }
+    const data = (await res.json().catch(() => ({}))) as GeminiResponse;
+    if (res.ok) {
+      if (data.promptFeedback?.blockReason)
+        throw new Error(`Request blocked by Gemini: ${data.promptFeedback.blockReason}.`);
+      const content = data.candidates?.[0]?.content;
+      if (!content) throw new Error("Gemini returned no content.");
+      return content;
+    }
+    lastErr = data.error?.message ?? `Gemini request failed (${res.status}).`;
+    if (!RETRYABLE_STATUS.has(res.status)) throw new Error(lastErr);
+    const retryAfter = Number(res.headers.get("retry-after"));
+    await sleep(retryAfter > 0 ? retryAfter * 1000 : 700 * Math.pow(2, attempt), signal);
+  }
+  throw new Error(`Gemini is busy (rate limited). ${lastErr}`);
 }
 
 function functionCallsIn(content: Content): FunctionCall[] {
@@ -368,6 +450,28 @@ function textIn(content: Content): string {
 
 export interface AgentCallbacks {
   onStatus?: (status: string | null) => void;
+  // Abort the whole turn (Stop button).
+  signal?: AbortSignal;
+  // Ask the user before a state-changing API call (POST/PUT/PATCH/DELETE).
+  // Resolve false to decline (the model is told and can adapt).
+  confirmWrite?: (req: { method: string; url: string }) => Promise<boolean>;
+}
+
+export class AbortedError extends Error {
+  constructor() {
+    super("Stopped.");
+    this.name = "AbortedError";
+  }
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(t);
+      reject(new AbortedError());
+    });
+  });
 }
 export interface AgentResult {
   contents: Content[];
@@ -428,12 +532,16 @@ export async function runAgentTurn(
 ): Promise<AgentResult> {
   const history: Content[] = [...contents];
   const setStatus = callbacks.onStatus ?? (() => {});
+  const signal = callbacks.signal;
   const systemInstruction = await buildSystemInstruction(memo);
+  const secrets = await collectSecretValues();
+  const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
   let jinaRateLimited = false;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    if (signal?.aborted) throw new AbortedError();
     setStatus("Thinking...");
-    const modelTurn = await callGemini(history, systemInstruction);
+    const modelTurn = await callGemini(history, systemInstruction, signal);
     history.push(modelTurn);
 
     const calls = functionCallsIn(modelTurn);
@@ -444,19 +552,30 @@ export async function runAgentTurn(
 
     const responseParts: Part[] = [];
     for (const call of calls) {
+      if (signal?.aborted) throw new AbortedError();
       setStatus(statusFor(call));
       const executor = TOOL_EXECUTORS[call.name];
       let result: Record<string, unknown>;
       if (!executor) {
         result = { ok: false, error: `Unknown tool: ${call.name}` };
       } else {
-        try {
-          result = await executor(call.args ?? {});
-        } catch (err) {
-          result = { ok: false, error: String(err) };
+        // Confirm state-changing API calls before executing them.
+        const method = String(call.args?.method ?? "GET").toUpperCase();
+        const isWrite = call.name === "http_request" && WRITE_METHODS.has(method);
+        const url = typeof call.args?.url === "string" ? (call.args.url as string) : "";
+        if (isWrite && callbacks.confirmWrite && !(await callbacks.confirmWrite({ method, url }))) {
+          result = { ok: false, error: "The user declined this request. Do not retry it; ask them what to do instead." };
+        } else {
+          try {
+            result = await executor(call.args ?? {}, signal);
+          } catch (err) {
+            if (signal?.aborted) throw new AbortedError();
+            result = { ok: false, error: String(err) };
+          }
         }
       }
       if (result.rateLimited === true) jinaRateLimited = true;
+      result = redactResult(result, secrets);
       await maybeLogFailure(call, result, ctx);
       responseParts.push({ functionResponse: { name: call.name, response: result } });
     }
@@ -464,8 +583,25 @@ export async function runAgentTurn(
     history.push({ role: "user", parts: responseParts });
   }
 
+  // Hit the tool-use ceiling: instead of crashing, ask for a best-effort answer
+  // with tools disabled so the user still gets a useful, honest summary.
+  if (signal?.aborted) throw new AbortedError();
+  setStatus("Wrapping up...");
+  const nudge: Content[] = [
+    ...history,
+    {
+      role: "user",
+      parts: [
+        {
+          text:
+            "You've reached the tool-use limit for this turn. Stop calling tools and give your best answer now using what you've gathered, clearly noting anything you couldn't complete.",
+        },
+      ],
+    },
+  ];
+  const summary = await callGemini(nudge, systemInstruction, signal, false);
   setStatus(null);
-  throw new Error(`Agent stopped after ${MAX_TOOL_ROUNDS} tool rounds without a final answer.`);
+  return { contents: history, reply: textIn(summary) || "(stopped after reaching the tool limit)", jinaRateLimited };
 }
 
 // Render structured turns into compact text for the summariser to read.
