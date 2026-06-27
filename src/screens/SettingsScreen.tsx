@@ -20,24 +20,38 @@ import {
 } from "react-native";
 
 import {
+  getAnthropicConfig,
   getGeminiKey,
   getGithubToken,
   getModel,
+  getOpenAiConfig,
+  getProvider,
   getSystemPrompt,
   getWriteMode,
   loadSecrets,
   normalizeSecretName,
   saveAll,
+  saveAnthropicConfig,
   saveGithubToken,
   saveModel,
+  saveOpenAiConfig,
+  saveProvider,
   saveSystemPrompt,
   saveWriteMode,
+  AiProvider,
   GitWriteMode,
   NamedSecret,
 } from "../storage/SecureStorage";
 import { clearErrors, listErrorsByThread, ErrorGroup } from "../storage/ErrorLogStore";
 import { getUserNotes, saveUserNotes } from "../storage/UserNotes";
-import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, MODEL_PRESETS } from "../agent/GeminiAgent";
+import {
+  ANTHROPIC_DEFAULT_MODEL,
+  ANTHROPIC_PRESETS,
+  DEFAULT_MODEL,
+  DEFAULT_SYSTEM_PROMPT,
+  MODEL_PRESETS,
+  OPENAI_PRESETS,
+} from "../agent/GeminiAgent";
 import McpServersModal from "./McpServersModal";
 import { theme } from "../theme";
 
@@ -75,11 +89,28 @@ export default function SettingsScreen() {
   // Live model list from Google (null = loading/failed -> use presets).
   const [modelMenu, setModelMenu] = useState(false);
   const [customModel, setCustomModel] = useState(false);
+  // AI provider + the non-Gemini backends' config.
+  const [provider, setProvider] = useState<AiProvider>("gemini");
+  const [anthropicKey, setAnthropicKey] = useState("");
+  const [anthropicModel, setAnthropicModel] = useState("");
+  const [anthMenu, setAnthMenu] = useState(false);
+  const [customAnth, setCustomAnth] = useState(false);
+  const [openaiBase, setOpenaiBase] = useState("");
+  const [openaiKey, setOpenaiKey] = useState("");
+  const [openaiModel, setOpenaiModel] = useState("");
 
   useEffect(() => {
     (async () => {
       setGeminiKey(await getGeminiKey());
       setModel(await getModel());
+      setProvider(await getProvider());
+      const oa = await getOpenAiConfig();
+      setOpenaiBase(oa.baseUrl);
+      setOpenaiKey(oa.apiKey);
+      setOpenaiModel(oa.model);
+      const an = await getAnthropicConfig();
+      setAnthropicKey(an.apiKey);
+      setAnthropicModel(an.model);
       setGithubToken(await getGithubToken());
       setWriteMode(await getWriteMode());
       setSystemPrompt(await getSystemPrompt());
@@ -121,6 +152,9 @@ export default function SettingsScreen() {
     try {
       await saveAll(geminiKey, secrets);
       await saveModel(model);
+      await saveProvider(provider);
+      await saveOpenAiConfig({ baseUrl: openaiBase, apiKey: openaiKey, model: openaiModel });
+      await saveAnthropicConfig({ apiKey: anthropicKey, model: anthropicModel });
       await saveGithubToken(githubToken);
       await saveWriteMode(writeMode);
       await saveSystemPrompt(systemPrompt);
@@ -150,43 +184,154 @@ export default function SettingsScreen() {
           secrets by name — their values are never sent to the model.
         </Text>
 
-        <Text style={styles.sectionLabel}>Gemini API key</Text>
-        <Text style={styles.hint}>Required to talk to the model.</Text>
-        <TextInput
-          style={styles.input}
-          value={geminiKey}
-          onChangeText={setGeminiKey}
-          placeholder="not set"
-          placeholderTextColor={theme.textDim}
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-        />
-        <Link label="Get a free Gemini key →" url="https://aistudio.google.com/apikey" />
-
-        <Text style={styles.sectionLabel}>Model</Text>
-        <Text style={styles.hint}>Which Gemini model the agent uses.</Text>
-        {(() => {
-          const eff = model || DEFAULT_MODEL;
-          const preset = MODEL_PRESETS.find((p) => p.id === eff);
-          return (
-            <TouchableOpacity style={styles.dropdown} onPress={() => setModelMenu(true)}>
-              <Text style={styles.dropdownText}>{preset ? `${preset.id} — ${preset.label}` : eff}</Text>
-              <Text style={styles.dropdownChevron}>▾</Text>
+        <Text style={styles.sectionLabel}>AI provider</Text>
+        <Text style={styles.hint}>Which AI runs the agent. Gemini is the default; the app is provider-agnostic.</Text>
+        <View style={styles.segment}>
+          {([
+            { id: "gemini", label: "Gemini" },
+            { id: "anthropic", label: "Claude" },
+            { id: "openai", label: "Other" },
+          ] as { id: AiProvider; label: string }[]).map((p) => (
+            <TouchableOpacity
+              key={p.id}
+              style={[styles.segItem, provider === p.id && styles.segItemOn]}
+              onPress={() => setProvider(p.id)}
+            >
+              <Text style={[styles.segText, provider === p.id && styles.segTextOn]}>{p.label}</Text>
             </TouchableOpacity>
-          );
-        })()}
-        {customModel || (!!model && !MODEL_PRESETS.some((p) => p.id === model)) ? (
-          <TextInput
-            style={[styles.input, { marginTop: 8 }]}
-            value={model}
-            onChangeText={setModel}
-            placeholder={`custom model id (default ${DEFAULT_MODEL})`}
-            placeholderTextColor={theme.textDim}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-        ) : null}
+          ))}
+        </View>
+
+        {provider === "gemini" ? (
+          <>
+            <Text style={styles.sectionLabel}>Gemini API key</Text>
+            <Text style={styles.hint}>Required to talk to the model.</Text>
+            <TextInput
+              style={styles.input}
+              value={geminiKey}
+              onChangeText={setGeminiKey}
+              placeholder="not set"
+              placeholderTextColor={theme.textDim}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+            />
+            <Link label="Get a free Gemini key →" url="https://aistudio.google.com/apikey" />
+
+            <Text style={styles.sectionLabel}>Model</Text>
+            <Text style={styles.hint}>Which Gemini model the agent uses.</Text>
+            {(() => {
+              const eff = model || DEFAULT_MODEL;
+              const preset = MODEL_PRESETS.find((p) => p.id === eff);
+              return (
+                <TouchableOpacity style={styles.dropdown} onPress={() => setModelMenu(true)}>
+                  <Text style={styles.dropdownText}>{preset ? `${preset.id} — ${preset.label}` : eff}</Text>
+                  <Text style={styles.dropdownChevron}>▾</Text>
+                </TouchableOpacity>
+              );
+            })()}
+            {customModel || (!!model && !MODEL_PRESETS.some((p) => p.id === model)) ? (
+              <TextInput
+                style={[styles.input, { marginTop: 8 }]}
+                value={model}
+                onChangeText={setModel}
+                placeholder={`custom model id (default ${DEFAULT_MODEL})`}
+                placeholderTextColor={theme.textDim}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            ) : null}
+          </>
+        ) : provider === "anthropic" ? (
+          <>
+            <Text style={styles.sectionLabel}>Anthropic API key</Text>
+            <Text style={styles.hint}>Runs Claude directly via the Anthropic Messages API.</Text>
+            <TextInput
+              style={styles.input}
+              value={anthropicKey}
+              onChangeText={setAnthropicKey}
+              placeholder="sk-ant-…"
+              placeholderTextColor={theme.textDim}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+            />
+            <Link label="Get an Anthropic key →" url="https://console.anthropic.com/settings/keys" />
+
+            <Text style={styles.sectionLabel}>Claude model</Text>
+            {(() => {
+              const eff = anthropicModel || ANTHROPIC_DEFAULT_MODEL;
+              const preset = ANTHROPIC_PRESETS.find((p) => p.id === eff);
+              return (
+                <TouchableOpacity style={styles.dropdown} onPress={() => setAnthMenu(true)}>
+                  <Text style={styles.dropdownText}>{preset ? `${preset.id} — ${preset.label}` : eff}</Text>
+                  <Text style={styles.dropdownChevron}>▾</Text>
+                </TouchableOpacity>
+              );
+            })()}
+            {customAnth || (!!anthropicModel && !ANTHROPIC_PRESETS.some((p) => p.id === anthropicModel)) ? (
+              <TextInput
+                style={[styles.input, { marginTop: 8 }]}
+                value={anthropicModel}
+                onChangeText={setAnthropicModel}
+                placeholder={`custom Claude model (default ${ANTHROPIC_DEFAULT_MODEL})`}
+                placeholderTextColor={theme.textDim}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            ) : null}
+          </>
+        ) : (
+          <>
+            <Text style={styles.sectionLabel}>OpenAI-compatible backend</Text>
+            <Text style={styles.hint}>
+              Any /chat/completions server — OpenAI, OpenRouter (incl. Claude), Groq, Mistral, DeepSeek, a local
+              LLM… Tap a preset or paste a base URL.
+            </Text>
+            <View style={styles.chips}>
+              {OPENAI_PRESETS.map((p) => (
+                <TouchableOpacity
+                  key={p.id}
+                  style={[styles.chip, openaiBase === p.baseUrl && styles.chipActive]}
+                  onPress={() => {
+                    setOpenaiBase(p.baseUrl);
+                    if (!openaiModel) setOpenaiModel(p.sampleModel);
+                  }}
+                >
+                  <Text style={[styles.chipText, openaiBase === p.baseUrl && styles.chipTextActive]}>{p.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TextInput
+              style={styles.input}
+              value={openaiBase}
+              onChangeText={setOpenaiBase}
+              placeholder="base URL, e.g. https://api.openai.com/v1"
+              placeholderTextColor={theme.textDim}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TextInput
+              style={[styles.input, { marginTop: 8 }]}
+              value={openaiKey}
+              onChangeText={setOpenaiKey}
+              placeholder="API key"
+              placeholderTextColor={theme.textDim}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+            />
+            <TextInput
+              style={[styles.input, { marginTop: 8 }]}
+              value={openaiModel}
+              onChangeText={setOpenaiModel}
+              placeholder="model id, e.g. gpt-4o-mini"
+              placeholderTextColor={theme.textDim}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+          </>
+        )}
 
         <Modal visible={modelMenu} transparent animationType="fade" onRequestClose={() => setModelMenu(false)}>
           <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setModelMenu(false)}>
@@ -214,6 +359,40 @@ export default function SettingsScreen() {
                 onPress={() => {
                   setCustomModel(true);
                   setModelMenu(false);
+                }}
+              >
+                <Text style={styles.modelName}>Custom…</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        <Modal visible={anthMenu} transparent animationType="fade" onRequestClose={() => setAnthMenu(false)}>
+          <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAnthMenu(false)}>
+            <View style={styles.modeCard}>
+              <Text style={styles.modeCardTitle}>Claude model</Text>
+              {ANTHROPIC_PRESETS.map((p) => (
+                <TouchableOpacity
+                  key={p.id}
+                  style={styles.modelRow}
+                  onPress={() => {
+                    setAnthropicModel(p.id);
+                    setCustomAnth(false);
+                    setAnthMenu(false);
+                  }}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modelName}>{p.id}</Text>
+                    <Text style={styles.modelDesc}>{p.label}</Text>
+                  </View>
+                  {(anthropicModel || ANTHROPIC_DEFAULT_MODEL) === p.id ? <Text style={styles.modelCheck}>✓</Text> : null}
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity
+                style={styles.modelRow}
+                onPress={() => {
+                  setCustomAnth(true);
+                  setAnthMenu(false);
                 }}
               >
                 <Text style={styles.modelName}>Custom…</Text>
@@ -472,6 +651,20 @@ const styles = StyleSheet.create({
     borderColor: theme.border,
     backgroundColor: theme.surface,
   },
+  segment: {
+    flexDirection: "row",
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 12,
+    padding: 4,
+    gap: 4,
+    marginTop: 8,
+  },
+  segItem: { flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: "center" },
+  segItemOn: { backgroundColor: theme.accent },
+  segText: { color: theme.textDim, fontSize: 14, fontWeight: "700" },
+  segTextOn: { color: theme.bg },
   chipActive: { borderColor: theme.accent, backgroundColor: theme.surfaceAlt },
   chipText: { color: theme.textDim, fontSize: 13 },
   chipTextActive: { color: theme.accent, fontWeight: "700" },

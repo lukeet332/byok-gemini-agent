@@ -17,6 +17,20 @@ const JINA_KEY = "JINA_API_KEY";
 const SYSTEM_PROMPT_KEY = "SYSTEM_PROMPT";
 // Selected Gemini model id ("" means: use the built-in default).
 const MODEL_KEY = "GEMINI_MODEL";
+// Which AI backend the agent talks to. Keeps the app AI-agnostic:
+//   "gemini"    — native Google Gemini (default).
+//   "anthropic" — native Claude (Messages API) with an Anthropic key.
+//   "openai"    — any OpenAI-compatible /chat/completions server (OpenAI,
+//                 OpenRouter [incl. Claude], Groq, Mistral, DeepSeek, xAI, local…).
+const PROVIDER_KEY = "AI_PROVIDER";
+export type AiProvider = "gemini" | "anthropic" | "openai";
+// OpenAI-compatible backend config (only used when provider === "openai").
+const OPENAI_BASE_KEY = "OPENAI_BASE_URL"; // e.g. https://api.openai.com/v1
+const OPENAI_TOKEN_KEY = "OPENAI_API_KEY";
+const OPENAI_MODEL_KEY = "OPENAI_MODEL";
+// Native Anthropic (Claude) config.
+const ANTHROPIC_TOKEN_KEY = "ANTHROPIC_API_KEY";
+const ANTHROPIC_MODEL_KEY = "ANTHROPIC_MODEL";
 // GitHub PAT for the coding backend (a first-class function key).
 const GITHUB_KEY = "GITHUB_TOKEN";
 // How the AI's code changes land: "pr" (branch+PR), "branch", or "main".
@@ -93,6 +107,83 @@ export async function saveModel(value: string): Promise<void> {
   const v = value.trim();
   if (v) await SecureStore.setItemAsync(MODEL_KEY, v);
   else await SecureStore.deleteItemAsync(MODEL_KEY);
+}
+
+// ---- AI provider selection (default: native Gemini) ----
+
+export async function getProvider(): Promise<AiProvider> {
+  const v = (await SecureStore.getItemAsync(PROVIDER_KEY)) as AiProvider | null;
+  return v === "openai" || v === "anthropic" ? v : "gemini";
+}
+
+export async function saveProvider(p: AiProvider): Promise<void> {
+  await SecureStore.setItemAsync(PROVIDER_KEY, p);
+}
+
+// ---- OpenAI-compatible backend config ----
+
+export interface OpenAiConfig {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+export async function getOpenAiConfig(): Promise<OpenAiConfig> {
+  return {
+    baseUrl: (await SecureStore.getItemAsync(OPENAI_BASE_KEY)) ?? "",
+    apiKey: (await SecureStore.getItemAsync(OPENAI_TOKEN_KEY)) ?? "",
+    model: (await SecureStore.getItemAsync(OPENAI_MODEL_KEY)) ?? "",
+  };
+}
+
+export async function saveOpenAiConfig(c: OpenAiConfig): Promise<void> {
+  const set = async (k: string, v: string) => {
+    const t = v.trim();
+    if (t) await SecureStore.setItemAsync(k, t);
+    else await SecureStore.deleteItemAsync(k);
+  };
+  await set(OPENAI_BASE_KEY, c.baseUrl);
+  await set(OPENAI_TOKEN_KEY, c.apiKey);
+  await set(OPENAI_MODEL_KEY, c.model);
+}
+
+// ---- Native Anthropic (Claude) config ----
+
+export interface AnthropicConfig {
+  apiKey: string;
+  model: string;
+}
+
+export async function getAnthropicConfig(): Promise<AnthropicConfig> {
+  return {
+    apiKey: (await SecureStore.getItemAsync(ANTHROPIC_TOKEN_KEY)) ?? "",
+    model: (await SecureStore.getItemAsync(ANTHROPIC_MODEL_KEY)) ?? "",
+  };
+}
+
+export async function saveAnthropicConfig(c: AnthropicConfig): Promise<void> {
+  const set = async (k: string, v: string) => {
+    const t = v.trim();
+    if (t) await SecureStore.setItemAsync(k, t);
+    else await SecureStore.deleteItemAsync(k);
+  };
+  await set(ANTHROPIC_TOKEN_KEY, c.apiKey);
+  await set(ANTHROPIC_MODEL_KEY, c.model);
+}
+
+// Whether a usable model backend is configured (gates first-run setup): native
+// Gemini needs its key; Claude needs an Anthropic key; an OpenAI-compatible
+// backend needs a base URL + key.
+export async function hasModelAccess(): Promise<boolean> {
+  const provider = await getProvider();
+  if (provider === "openai") {
+    const c = await getOpenAiConfig();
+    return !!(c.baseUrl && c.apiKey);
+  }
+  if (provider === "anthropic") {
+    return !!(await getAnthropicConfig()).apiKey;
+  }
+  return !!(await getGeminiKey());
 }
 
 // ---- GitHub PAT (coding backend) ----

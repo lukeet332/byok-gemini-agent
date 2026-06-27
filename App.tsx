@@ -14,7 +14,7 @@ import ChatScreen from "./src/screens/ChatScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import SetupScreen from "./src/screens/SetupScreen";
 import ThreadListScreen from "./src/screens/ThreadListScreen";
-import { getGeminiKey } from "./src/storage/SecureStorage";
+import { hasModelAccess } from "./src/storage/SecureStorage";
 import { theme } from "./src/theme";
 
 type View_ = "list" | "chat" | "settings";
@@ -32,7 +32,7 @@ export default function App() {
   const [splashDone, setSplashDone] = useState(false);
 
   useEffect(() => {
-    getGeminiKey().then((k) => setReady(!!k));
+    hasModelAccess().then(setReady);
   }, []);
 
   function openThread(id: string) {

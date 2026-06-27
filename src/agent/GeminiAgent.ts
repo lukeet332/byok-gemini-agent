@@ -9,8 +9,18 @@
 
 import { fetch as expoFetch } from "expo/fetch";
 
-import { Content, FunctionCall, Part, Tool } from "../types";
-import { getGeminiKey, getGithubToken, getModel, getSecretValue, getSystemPrompt, listSecretNames } from "../storage/SecureStorage";
+import { Content, FunctionCall, FunctionDeclaration, Part, Tool } from "../types";
+import {
+  getAnthropicConfig,
+  getGeminiKey,
+  getGithubToken,
+  getModel,
+  getOpenAiConfig,
+  getProvider,
+  getSecretValue,
+  getSystemPrompt,
+  listSecretNames,
+} from "../storage/SecureStorage";
 import { appendError } from "../storage/ErrorLogStore";
 import { getUserNotes, saveUserNotes } from "../storage/UserNotes";
 import { BrowserEngine } from "../browser/BrowserEngine";
@@ -708,6 +718,303 @@ async function streamModelTurn(
   return { role: "model", parts: finalParts.length ? finalParts : [{ text: "" }] };
 }
 
+// ============================================================================
+// Provider adapters — keep the app AI-agnostic. The agent loop speaks one
+// internal shape (Gemini-style Content[] with text / functionCall /
+// functionResponse / inlineData parts); these translate to/from each backend.
+// ============================================================================
+
+// Popular OpenAI-compatible backends, to prefill the base URL in Settings. We
+// POST to {baseUrl}/chat/completions. Claude is reachable here via OpenRouter.
+export const OPENAI_PRESETS: { id: string; label: string; baseUrl: string; sampleModel: string }[] = [
+  { id: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1", sampleModel: "gpt-4o-mini" },
+  { id: "openrouter", label: "OpenRouter — incl. Claude", baseUrl: "https://openrouter.ai/api/v1", sampleModel: "anthropic/claude-3.7-sonnet" },
+  { id: "groq", label: "Groq — fast", baseUrl: "https://api.groq.com/openai/v1", sampleModel: "llama-3.3-70b-versatile" },
+  { id: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com", sampleModel: "deepseek-chat" },
+  { id: "mistral", label: "Mistral", baseUrl: "https://api.mistral.ai/v1", sampleModel: "mistral-large-latest" },
+  { id: "xai", label: "xAI — Grok", baseUrl: "https://api.x.ai/v1", sampleModel: "grok-2-latest" },
+  { id: "together", label: "Together AI", baseUrl: "https://api.together.xyz/v1", sampleModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo" },
+];
+
+// Claude model presets (native Anthropic).
+export const ANTHROPIC_DEFAULT_MODEL = "claude-3-7-sonnet-latest";
+export const ANTHROPIC_PRESETS: { id: string; label: string }[] = [
+  { id: "claude-3-7-sonnet-latest", label: "Claude 3.7 Sonnet · balanced" },
+  { id: "claude-3-5-haiku-latest", label: "Claude 3.5 Haiku · fastest" },
+  { id: "claude-opus-4-1", label: "Claude Opus 4.1 · most capable" },
+];
+
+function flattenDecls(): FunctionDeclaration[] {
+  return activeTools.flatMap((t) => t.functionDeclarations);
+}
+
+function systemTextOf(systemInstruction: Content): string {
+  return (systemInstruction.parts ?? [])
+    .map((p) => p.text)
+    .filter((t): t is string => typeof t === "string")
+    .join("\n");
+}
+
+function imagePartsOf(parts: Part[]): { mimeType: string; data: string }[] {
+  return parts
+    .map((p) => p.inlineData)
+    .filter((x): x is { mimeType: string; data: string } => !!x);
+}
+
+// ---- OpenAI-compatible (/chat/completions) ----
+
+function toOpenAiTools(): unknown[] {
+  return flattenDecls().map((d) => ({
+    type: "function",
+    function: { name: d.name, description: d.description, parameters: d.parameters ?? { type: "object", properties: {} } },
+  }));
+}
+
+// Gemini function responses carry no call id, but OpenAI tool messages need a
+// tool_call_id matching the preceding assistant tool_calls. Our loop always
+// pairs a model turn's calls with the immediately-following responses (in order),
+// so we mint deterministic ids and hand the same batch to the next tool results.
+function toOpenAiMessages(systemText: string, contents: Content[]): unknown[] {
+  const messages: any[] = [];
+  if (systemText) messages.push({ role: "system", content: systemText });
+  let pendingIds: string[] = [];
+  let pendingIdx = 0;
+  contents.forEach((c, i) => {
+    const parts = c.parts ?? [];
+    if (c.role === "model") {
+      const calls = parts.map((p) => p.functionCall).filter((x): x is FunctionCall => !!x);
+      const text = parts.map((p) => p.text).filter((t): t is string => typeof t === "string").join("");
+      const msg: any = { role: "assistant", content: text || "" };
+      if (calls.length) {
+        pendingIds = calls.map((_, k) => `call_${i}_${k}`);
+        pendingIdx = 0;
+        msg.tool_calls = calls.map((fc, k) => ({
+          id: pendingIds[k],
+          type: "function",
+          function: { name: fc.name, arguments: JSON.stringify(fc.args ?? {}) },
+        }));
+        if (!text) msg.content = null;
+      }
+      messages.push(msg);
+    } else {
+      const responses = parts
+        .map((p) => p.functionResponse)
+        .filter((x): x is { name: string; response: Record<string, unknown> } => !!x);
+      for (const r of responses) {
+        const id = pendingIds[pendingIdx++] ?? `call_${i}_${pendingIdx}`;
+        messages.push({ role: "tool", tool_call_id: id, content: JSON.stringify(r.response).slice(0, 16000) });
+      }
+      const textParts = parts.map((p) => p.text).filter((t): t is string => typeof t === "string" && t.length > 0);
+      const images = imagePartsOf(parts);
+      if (textParts.length || images.length) {
+        if (images.length) {
+          const content: any[] = [];
+          if (textParts.length) content.push({ type: "text", text: textParts.join("\n") });
+          for (const img of images)
+            content.push({ type: "image_url", image_url: { url: `data:${img.mimeType};base64,${img.data}` } });
+          messages.push({ role: "user", content });
+        } else {
+          messages.push({ role: "user", content: textParts.join("\n") });
+        }
+      }
+    }
+  });
+  return messages;
+}
+
+async function callOpenAi(
+  contents: Content[],
+  systemInstruction: Content,
+  signal?: AbortSignal,
+  withTools = true,
+  onToken?: (full: string) => void
+): Promise<Content> {
+  if (signal?.aborted) throw new AbortedError();
+  const cfg = await getOpenAiConfig();
+  if (!cfg.baseUrl || !cfg.apiKey) throw new Error("No AI backend configured. Add a base URL + API key in Settings.");
+  const body: Record<string, unknown> = {
+    model: cfg.model || "gpt-4o-mini",
+    messages: toOpenAiMessages(systemTextOf(systemInstruction), contents),
+  };
+  if (withTools) {
+    const tools = toOpenAiTools();
+    if (tools.length) body.tools = tools;
+  }
+  const base = cfg.baseUrl.replace(/\/+$/, "");
+  let res: Response;
+  try {
+    res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (e) {
+    if (signal?.aborted) throw new AbortedError();
+    throw new Error(`Network error: ${String(e)}`);
+  }
+  const data = (await res.json().catch(() => ({}))) as any;
+  if (!res.ok) throw new Error(data?.error?.message ?? `AI request failed (${res.status}).`);
+  const message = data?.choices?.[0]?.message;
+  if (!message) throw new Error("AI returned no content.");
+  const parts: Part[] = [];
+  const textOut = typeof message.content === "string" ? message.content : "";
+  if (textOut) {
+    parts.push({ text: textOut });
+    onToken?.(textOut);
+  }
+  for (const tc of Array.isArray(message.tool_calls) ? message.tool_calls : []) {
+    const name = tc?.function?.name;
+    if (!name) continue;
+    let parsedArgs: Record<string, unknown> = {};
+    try {
+      parsedArgs = JSON.parse(tc.function.arguments || "{}");
+    } catch {
+      parsedArgs = {};
+    }
+    parts.push({ functionCall: { name, args: parsedArgs } });
+  }
+  return { role: "model", parts: parts.length ? parts : [{ text: "" }] };
+}
+
+// ---- Native Anthropic (Claude Messages API) ----
+
+const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+
+function toAnthropicTools(): unknown[] {
+  return flattenDecls().map((d) => ({
+    name: d.name,
+    description: d.description,
+    input_schema: d.parameters ?? { type: "object", properties: {} },
+  }));
+}
+
+// Claude carries tool_use ids on the assistant turn and tool_result references
+// them — same id-minting trick as OpenAI to bridge our id-less history.
+function toAnthropicMessages(contents: Content[]): unknown[] {
+  const messages: any[] = [];
+  let pendingIds: string[] = [];
+  let pendingIdx = 0;
+  contents.forEach((c, i) => {
+    const parts = c.parts ?? [];
+    if (c.role === "model") {
+      const calls = parts.map((p) => p.functionCall).filter((x): x is FunctionCall => !!x);
+      const text = parts.map((p) => p.text).filter((t): t is string => typeof t === "string").join("");
+      const blocks: any[] = [];
+      if (text) blocks.push({ type: "text", text });
+      if (calls.length) {
+        pendingIds = calls.map((_, k) => `toolu_${i}_${k}`);
+        pendingIdx = 0;
+        for (let k = 0; k < calls.length; k++)
+          blocks.push({ type: "tool_use", id: pendingIds[k], name: calls[k].name, input: calls[k].args ?? {} });
+      }
+      messages.push({ role: "assistant", content: blocks.length ? blocks : [{ type: "text", text: "" }] });
+    } else {
+      const responses = parts
+        .map((p) => p.functionResponse)
+        .filter((x): x is { name: string; response: Record<string, unknown> } => !!x);
+      const blocks: any[] = [];
+      for (const r of responses) {
+        const id = pendingIds[pendingIdx++] ?? `toolu_${i}_${pendingIdx}`;
+        blocks.push({ type: "tool_result", tool_use_id: id, content: JSON.stringify(r.response).slice(0, 16000) });
+      }
+      const textParts = parts.map((p) => p.text).filter((t): t is string => typeof t === "string" && t.length > 0);
+      for (const t of textParts) blocks.push({ type: "text", text: t });
+      for (const img of imagePartsOf(parts))
+        blocks.push({ type: "image", source: { type: "base64", media_type: img.mimeType, data: img.data } });
+      if (blocks.length) messages.push({ role: "user", content: blocks });
+    }
+  });
+  return messages;
+}
+
+async function callAnthropic(
+  contents: Content[],
+  systemInstruction: Content,
+  signal?: AbortSignal,
+  withTools = true,
+  onToken?: (full: string) => void
+): Promise<Content> {
+  if (signal?.aborted) throw new AbortedError();
+  const cfg = await getAnthropicConfig();
+  if (!cfg.apiKey) throw new Error("No Anthropic API key. Add it in Settings.");
+  const body: Record<string, unknown> = {
+    model: cfg.model || ANTHROPIC_DEFAULT_MODEL,
+    max_tokens: 4096,
+    system: systemTextOf(systemInstruction),
+    messages: toAnthropicMessages(contents),
+  };
+  if (withTools) {
+    const tools = toAnthropicTools();
+    if (tools.length) body.tools = tools;
+  }
+  let res: Response;
+  try {
+    res = await fetch(ANTHROPIC_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": cfg.apiKey,
+        "anthropic-version": "2023-06-01",
+        // Allow the call from a non-browser app context without a CORS preflight.
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (e) {
+    if (signal?.aborted) throw new AbortedError();
+    throw new Error(`Network error: ${String(e)}`);
+  }
+  const data = (await res.json().catch(() => ({}))) as any;
+  if (!res.ok) throw new Error(data?.error?.message ?? `Claude request failed (${res.status}).`);
+  const blocks = Array.isArray(data?.content) ? data.content : [];
+  const parts: Part[] = [];
+  let textAcc = "";
+  for (const b of blocks) {
+    if (b?.type === "text" && typeof b.text === "string") {
+      textAcc += b.text;
+      parts.push({ text: b.text });
+      onToken?.(textAcc);
+    } else if (b?.type === "tool_use" && b.name) {
+      parts.push({ functionCall: { name: b.name, args: (b.input ?? {}) as Record<string, unknown> } });
+    }
+  }
+  return { role: "model", parts: parts.length ? parts : [{ text: "" }] };
+}
+
+// Provider dispatcher: one model turn in our internal shape, routed to the
+// configured backend. Gemini streams (token-by-token) with a non-streaming
+// fallback; the others are single-shot (text emitted once via onToken).
+async function callModel(
+  contents: Content[],
+  systemInstruction: Content,
+  signal?: AbortSignal,
+  onToken?: (full: string) => void,
+  withTools = true
+): Promise<Content> {
+  const provider = await getProvider();
+  if (provider === "openai") return callOpenAi(contents, systemInstruction, signal, withTools, onToken);
+  if (provider === "anthropic") return callAnthropic(contents, systemInstruction, signal, withTools, onToken);
+  // Gemini.
+  if (!withTools) return callGemini(contents, systemInstruction, signal, false);
+  try {
+    return await streamModelTurn(contents, systemInstruction, signal, onToken);
+  } catch (err) {
+    if (err instanceof AbortedError) throw err;
+    // Don't fire a 2nd request for rate-limit/quota errors — it wastes more quota.
+    if (/\b429\b|quota|RESOURCE_EXHAUSTED|rate.?limit/i.test(String(err))) throw err;
+    return await callGemini(contents, systemInstruction, signal);
+  }
+}
+
+// Provider-neutral single text completion (no tools) — for compaction & titles.
+async function generateText(prompt: string): Promise<string> {
+  const sys: Content = { role: "user", parts: [{ text: "You are a helpful assistant." }] };
+  const turn = await callModel([{ role: "user", parts: [{ text: prompt }] }], sys, undefined, undefined, false);
+  return textIn(turn);
+}
+
 function functionCallsIn(content: Content): FunctionCall[] {
   return (content.parts ?? [])
     .map((p) => p.functionCall)
@@ -840,23 +1147,14 @@ export async function runAgentTurn(
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (signal?.aborted) throw new AbortedError();
     setStatus("Thinking...");
-    // Prefer streaming; fall back to the (retrying) non-streaming call if the
-    // device/network can't stream.
-    let modelTurn: Content;
-    try {
-      modelTurn = await streamModelTurn(history, systemInstruction, signal, callbacks.onToken);
-    } catch (err) {
-      if (err instanceof AbortedError) throw err;
-      // Don't fire a 2nd request for rate-limit/quota errors — it wastes more quota.
-      if (/\b429\b|quota|RESOURCE_EXHAUSTED|rate.?limit/i.test(String(err))) throw err;
-      modelTurn = await callGemini(history, systemInstruction, signal);
-    }
-    history.push(modelTurn);
+    // Route to the configured backend (Gemini streams; others are single-shot).
+    const turn = await callModel(history, systemInstruction, signal, callbacks.onToken);
+    history.push(turn);
 
-    const calls = functionCallsIn(modelTurn);
+    const calls = functionCallsIn(turn);
     if (calls.length === 0) {
       setStatus(null);
-      return { contents: history, reply: textIn(modelTurn) || "(no response)" };
+      return { contents: history, reply: textIn(turn) || "(no response)" };
     }
 
     const responseParts: Part[] = [];
@@ -934,7 +1232,7 @@ export async function runAgentTurn(
       ],
     },
   ];
-  const summary = await callGemini(nudge, systemInstruction, signal, false);
+  const summary = await callModel(nudge, systemInstruction, signal, undefined, false);
   setStatus(null);
   return { contents: history, reply: textIn(summary) || "(stopped after reaching the tool limit)" };
 }
@@ -958,9 +1256,6 @@ function renderTurns(turns: Content[]): string {
 // the model's own future reference — terse, information-dense, NOT formatted for
 // humans. This is the on-device equivalent of context compaction.
 export async function compactConversation(memo: string, turnsToFold: Content[]): Promise<string> {
-  const apiKey = await getGeminiKey();
-  if (!apiKey) throw new Error("No Gemini API key.");
-
   const prompt =
     "You maintain a dense, token-efficient MEMORY LOG of a conversation, for your " +
     "own future reference only (never shown to a human, so do not optimise for " +
@@ -969,39 +1264,18 @@ export async function compactConversation(memo: string, turnsToFold: Content[]):
     "useful tool results/URLs, and open threads. Drop pleasantries and redundancy. " +
     "Use terse bullet shorthand. Output ONLY the updated memory text.\n\n" +
     `PRIOR MEMORY:\n${memo || "(none)"}\n\nNEW EXCHANGES:\n${renderTurns(turnsToFold)}`;
-
-  const res = await fetch(`${await genEndpoint()}?key=${encodeURIComponent(apiKey)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }),
-  });
-  const data = (await res.json().catch(() => ({}))) as GeminiResponse;
-  if (!res.ok) throw new Error(data.error?.message ?? `Compaction failed (${res.status}).`);
-  const text = data.candidates?.[0]?.content
-    ? textIn(data.candidates[0].content as Content)
-    : "";
-  return text || memo;
+  try {
+    const text = await generateText(prompt);
+    return text || memo;
+  } catch {
+    return memo;
+  }
 }
 
 // A short title for a new thread, derived from the first user message.
 export async function suggestTitle(firstMessage: string): Promise<string> {
-  const apiKey = await getGeminiKey();
-  if (!apiKey) return firstMessage.slice(0, 40);
   try {
-    const res = await fetch(`${await genEndpoint()}?key=${encodeURIComponent(apiKey)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: `Give a 3-5 word title (no quotes) for a chat that starts: "${firstMessage}"` }],
-          },
-        ],
-      }),
-    });
-    const data = (await res.json().catch(() => ({}))) as GeminiResponse;
-    const t = data.candidates?.[0]?.content ? textIn(data.candidates[0].content as Content) : "";
+    const t = await generateText(`Give a 3-5 word title (no quotes) for a chat that starts: "${firstMessage}"`);
     return (t || firstMessage).replace(/^["']|["']$/g, "").slice(0, 48) || "New chat";
   } catch {
     return firstMessage.slice(0, 40) || "New chat";
