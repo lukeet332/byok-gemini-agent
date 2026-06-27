@@ -52,3 +52,21 @@ export interface ChatMessage {
   role: Role;
   text: string;
 }
+
+// ---- Threads (locally persisted conversations) ----
+
+// Lightweight entry for the thread list (no heavy history).
+export interface ThreadMeta {
+  id: string;
+  title: string;
+  updatedAt: number;
+}
+
+// A full conversation thread, persisted on-device as JSON.
+// `memo` is a dense, AI-only summary of older turns (compacted context);
+// `contents` holds the recent verbatim turns kept for the model.
+export interface Thread extends ThreadMeta {
+  createdAt: number;
+  memo: string;
+  contents: Content[];
+}

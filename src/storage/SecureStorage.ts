@@ -1,65 +1,121 @@
-// Thin, typed wrapper around expo-secure-store. Every secret the app holds lives
-// here and ONLY here: the user's private API keys are written to the device's
-// hardware-backed keystore (Android Keystore / iOS Keychain) and are never
-// hardcoded, logged, or transmitted to any backend we control.
+// Thin, typed wrapper around expo-secure-store. Everything secret lives here and
+// ONLY here: the Gemini key plus an arbitrary, user-defined set of named API
+// credentials. All are written to the device's hardware-backed keystore
+// (Android Keystore / iOS Keychain) — never hardcoded, logged, or sent to any
+// backend of ours. The agent references these by NAME and the raw values are
+// substituted in locally, so they never reach the Gemini model either.
 
 import * as SecureStore from "expo-secure-store";
 
-// Stable storage keys. Changing these strings orphans previously saved values.
-export const StorageKeys = {
-  GEMINI_API_KEY: "GEMINI_API_KEY",
-  NOTION_API_KEY: "NOTION_API_KEY",
-  NOTION_DATABASE_ID: "NOTION_DATABASE_ID",
-} as const;
+// Fixed key for the Gemini API key (needed to call the model itself).
+const GEMINI_KEY = "GEMINI_API_KEY";
+// Index of the user's custom secret names (JSON array of strings).
+const SECRET_INDEX = "SECRET_NAMES";
+// Each custom secret value is stored under this prefix + its name.
+const SECRET_PREFIX = "secret__";
 
-export type StorageKey = (typeof StorageKeys)[keyof typeof StorageKeys];
-
-// All secrets, loaded together for the Settings form.
-export interface StoredSecrets {
-  GEMINI_API_KEY: string;
-  NOTION_API_KEY: string;
-  NOTION_DATABASE_ID: string;
+// A user-defined credential, e.g. { name: "NOTION_KEY", value: "ntn_..." }.
+export interface NamedSecret {
+  name: string;
+  value: string;
 }
 
-async function get(key: StorageKey): Promise<string> {
-  const value = await SecureStore.getItemAsync(key);
-  return value ?? "";
+function valueKey(name: string): string {
+  return SECRET_PREFIX + name;
 }
 
-async function set(key: StorageKey, value: string): Promise<void> {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    // Empty input clears the stored value rather than persisting whitespace.
-    await SecureStore.deleteItemAsync(key);
-    return;
+// Secret names are referenced as {{NAME}} by the model, so constrain them to a
+// safe, predictable token shape.
+export function normalizeSecretName(raw: string): string {
+  return raw
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+// ---- Gemini key ----
+
+export async function getGeminiKey(): Promise<string> {
+  return (await SecureStore.getItemAsync(GEMINI_KEY)) ?? "";
+}
+
+export async function saveGeminiKey(value: string): Promise<void> {
+  const v = value.trim();
+  if (v) await SecureStore.setItemAsync(GEMINI_KEY, v);
+  else await SecureStore.deleteItemAsync(GEMINI_KEY);
+}
+
+// ---- Custom named secrets ----
+
+async function readIndex(): Promise<string[]> {
+  const raw = await SecureStore.getItemAsync(SECRET_INDEX);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((n) => typeof n === "string") : [];
+  } catch {
+    return [];
   }
-  await SecureStore.setItemAsync(key, trimmed);
 }
 
-// Read a single secret. Returns "" when unset.
-export function getSecret(key: StorageKey): Promise<string> {
-  return get(key);
+async function writeIndex(names: string[]): Promise<void> {
+  const unique = Array.from(new Set(names)).sort();
+  await SecureStore.setItemAsync(SECRET_INDEX, JSON.stringify(unique));
 }
 
-// Load every secret at once (used to hydrate the Settings screen).
-export async function loadSecrets(): Promise<StoredSecrets> {
-  const [gemini, notionKey, notionDb] = await Promise.all([
-    get(StorageKeys.GEMINI_API_KEY),
-    get(StorageKeys.NOTION_API_KEY),
-    get(StorageKeys.NOTION_DATABASE_ID),
-  ]);
-  return {
-    GEMINI_API_KEY: gemini,
-    NOTION_API_KEY: notionKey,
-    NOTION_DATABASE_ID: notionDb,
-  };
+// Just the names (for telling the model what's available, without values).
+export async function listSecretNames(): Promise<string[]> {
+  return readIndex();
 }
 
-// Persist every secret at once (used by the Settings "Save" button).
-export async function saveSecrets(secrets: StoredSecrets): Promise<void> {
-  await Promise.all([
-    set(StorageKeys.GEMINI_API_KEY, secrets.GEMINI_API_KEY),
-    set(StorageKeys.NOTION_API_KEY, secrets.NOTION_API_KEY),
-    set(StorageKeys.NOTION_DATABASE_ID, secrets.NOTION_DATABASE_ID),
-  ]);
+// Names + values, for hydrating the Settings screen.
+export async function loadSecrets(): Promise<NamedSecret[]> {
+  const names = await readIndex();
+  const entries = await Promise.all(
+    names.map(async (name) => ({
+      name,
+      value: (await SecureStore.getItemAsync(valueKey(name))) ?? "",
+    }))
+  );
+  return entries;
+}
+
+// Look up one secret's raw value (used during on-device substitution).
+export async function getSecretValue(name: string): Promise<string | null> {
+  return SecureStore.getItemAsync(valueKey(name));
+}
+
+export async function saveSecret(name: string, value: string): Promise<void> {
+  const normalized = normalizeSecretName(name);
+  if (!normalized) return;
+  await SecureStore.setItemAsync(valueKey(normalized), value.trim());
+  const names = await readIndex();
+  if (!names.includes(normalized)) await writeIndex([...names, normalized]);
+}
+
+export async function deleteSecret(name: string): Promise<void> {
+  await SecureStore.deleteItemAsync(valueKey(name));
+  await writeIndex((await readIndex()).filter((n) => n !== name));
+}
+
+// Persist the whole Settings form at once: the Gemini key plus the full secret
+// list (anything previously stored but absent here is removed).
+export async function saveAll(geminiKey: string, secrets: NamedSecret[]): Promise<void> {
+  await saveGeminiKey(geminiKey);
+
+  const kept: string[] = [];
+  for (const s of secrets) {
+    const name = normalizeSecretName(s.name);
+    if (!name) continue;
+    await SecureStore.setItemAsync(valueKey(name), s.value.trim());
+    kept.push(name);
+  }
+
+  // Drop secrets that were removed in the form.
+  const previous = await readIndex();
+  for (const old of previous) {
+    if (!kept.includes(old)) await SecureStore.deleteItemAsync(valueKey(old));
+  }
+  await writeIndex(kept);
 }
