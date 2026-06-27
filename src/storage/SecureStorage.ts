@@ -33,6 +33,9 @@ const ANTHROPIC_TOKEN_KEY = "ANTHROPIC_API_KEY";
 const ANTHROPIC_MODEL_KEY = "ANTHROPIC_MODEL";
 // GitHub PAT for the coding backend (a first-class function key).
 const GITHUB_KEY = "GITHUB_TOKEN";
+// Keep an agent turn running when the app is backgrounded (Android foreground
+// service; iOS best-effort grace period). "" / "1" = on (default), "0" = off.
+const BACKGROUND_KEY = "BACKGROUND_RUN";
 // How the AI's code changes land: "pr" (branch+PR), "branch", or "main".
 const WRITE_MODE_KEY = "GIT_WRITE_MODE";
 export type GitWriteMode = "pr" | "branch" | "main";
@@ -196,6 +199,16 @@ export async function saveGithubToken(value: string): Promise<void> {
   const v = value.trim();
   if (v) await SecureStore.setItemAsync(GITHUB_KEY, v);
   else await SecureStore.deleteItemAsync(GITHUB_KEY);
+}
+
+// ---- Background execution (default: on) ----
+
+export async function getBackgroundRun(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(BACKGROUND_KEY)) !== "0";
+}
+
+export async function saveBackgroundRun(on: boolean): Promise<void> {
+  await SecureStore.setItemAsync(BACKGROUND_KEY, on ? "1" : "0");
 }
 
 // ---- Git write mode (default: branch + PR) ----

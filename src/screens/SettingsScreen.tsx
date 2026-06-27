@@ -13,6 +13,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -21,6 +22,7 @@ import {
 
 import {
   getAnthropicConfig,
+  getBackgroundRun,
   getGeminiKey,
   getGithubToken,
   getModel,
@@ -32,6 +34,7 @@ import {
   normalizeSecretName,
   saveAll,
   saveAnthropicConfig,
+  saveBackgroundRun,
   saveGithubToken,
   saveModel,
   saveOpenAiConfig,
@@ -43,6 +46,7 @@ import {
   NamedSecret,
 } from "../storage/SecureStorage";
 import { clearErrors, listErrorsByThread, ErrorGroup } from "../storage/ErrorLogStore";
+import { requestNotificationPermission } from "../agent/Background";
 import { getUserNotes, saveUserNotes } from "../storage/UserNotes";
 import {
   ANTHROPIC_DEFAULT_MODEL,
@@ -98,6 +102,7 @@ export default function SettingsScreen() {
   const [openaiBase, setOpenaiBase] = useState("");
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("");
+  const [backgroundRun, setBackgroundRunState] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -111,6 +116,7 @@ export default function SettingsScreen() {
       const an = await getAnthropicConfig();
       setAnthropicKey(an.apiKey);
       setAnthropicModel(an.model);
+      setBackgroundRunState(await getBackgroundRun());
       setGithubToken(await getGithubToken());
       setWriteMode(await getWriteMode());
       setSystemPrompt(await getSystemPrompt());
@@ -155,6 +161,7 @@ export default function SettingsScreen() {
       await saveProvider(provider);
       await saveOpenAiConfig({ baseUrl: openaiBase, apiKey: openaiKey, model: openaiModel });
       await saveAnthropicConfig({ apiKey: anthropicKey, model: anthropicModel });
+      await saveBackgroundRun(backgroundRun);
       await saveGithubToken(githubToken);
       await saveWriteMode(writeMode);
       await saveSystemPrompt(systemPrompt);
@@ -400,6 +407,27 @@ export default function SettingsScreen() {
             </View>
           </TouchableOpacity>
         </Modal>
+
+        <Text style={styles.sectionLabel}>Background</Text>
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleTextWrap}>
+            <Text style={styles.toggleName}>Keep working in the background</Text>
+            <Text style={styles.hint}>
+              Don't cancel a running task when you leave the app or lock the screen — let it finish, and get a
+              notification when it's done. The OS grants a grace period (longer on Android than iOS); if a long
+              task is suspended, your chat is saved and offers a Continue button when you reopen it.
+            </Text>
+          </View>
+          <Switch
+            value={backgroundRun}
+            onValueChange={(v) => {
+              setBackgroundRunState(v);
+              if (v) void requestNotificationPermission();
+            }}
+            trackColor={{ false: theme.border, true: theme.accent }}
+            thumbColor={theme.text}
+          />
+        </View>
 
         <Text style={styles.sectionLabel}>GitHub (coding)</Text>
         <Text style={styles.hint}>
@@ -661,6 +689,9 @@ const styles = StyleSheet.create({
     gap: 4,
     marginTop: 8,
   },
+  toggleRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 8 },
+  toggleTextWrap: { flex: 1 },
+  toggleName: { color: theme.text, fontSize: 15, fontWeight: "700" },
   segItem: { flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: "center" },
   segItemOn: { backgroundColor: theme.accent },
   segText: { color: theme.textDim, fontSize: 14, fontWeight: "700" },

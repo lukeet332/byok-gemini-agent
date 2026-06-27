@@ -32,6 +32,8 @@ import {
 } from "expo-speech-recognition";
 
 import { AbortedError, compactConversation, runAgentTurn } from "../agent/GeminiAgent";
+import { notifyTurnDone } from "../agent/Background";
+import { getBackgroundRun } from "../storage/SecureStorage";
 import McpServersModal from "./McpServersModal";
 import {
   COMPACT_THRESHOLD_CHARS,
@@ -201,6 +203,11 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   const abortRef = useRef<AbortController | null>(null);
   const bgAbortRef = useRef(false);
   const busyRef = useRef(false);
+  // Background execution: when enabled, let the turn keep running when the app
+  // is backgrounded (instead of aborting it) and notify on completion.
+  const backgroundRunRef = useRef(true);
+  // Last turn left a user message unanswered (interrupted) → offer to continue.
+  const [needsResume, setNeedsResume] = useState(false);
   // True when the pending message was dictated (so we read the reply aloud).
   const voiceInputRef = useRef(false);
   // Messages sent while a turn is running queue here; runningRef gates the single
@@ -218,11 +225,19 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     busyRef.current = busy;
   }, [busy]);
 
-  // If the app is backgrounded mid-task, the JS engine pauses and the turn can't
-  // continue — abort cleanly and tell the user, rather than hanging forever.
+  // Load the background-run preference (kept in a ref for the AppState handler).
+  useEffect(() => {
+    getBackgroundRun().then((v) => {
+      backgroundRunRef.current = v;
+    });
+  }, []);
+
+  // App backgrounded mid-task: if background-run is ON, let the turn keep
+  // running (the OS grants a grace period; we notify on completion). If it's
+  // OFF, abort cleanly so the turn doesn't hang.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
-      if (state !== "active" && busyRef.current && abortRef.current) {
+      if (state !== "active" && busyRef.current && !backgroundRunRef.current && abortRef.current) {
         bgAbortRef.current = true;
         abortRef.current.abort();
       }
@@ -334,6 +349,10 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
       queueRef.current = [];
       setQueuedCount(0);
       setMessages(toMessages(loaded.contents));
+      // If the thread ends on an unanswered user message, the last turn was
+      // interrupted (backgrounded/killed/crashed) — offer to continue it.
+      const last = loaded.contents[loaded.contents.length - 1];
+      setNeedsResume(!!last && last.role === "user" && !!turnText(last));
     })();
     return () => {
       active = false;
@@ -412,6 +431,14 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     await runTurn(liveContentsRef.current, false, null);
   }
 
+  // Continue an interrupted turn: the history already ends with the user's
+  // message, so just run it (no new bubble). Used by the resume banner.
+  function resumeTurn() {
+    if (runningRef.current || !thread) return;
+    setNeedsResume(false);
+    void runTurn(liveContentsRef.current, false, null);
+  }
+
   // Re-run the last user turn: drop the trailing model reply and regenerate.
   function regenerateLast() {
     if (runningRef.current || !thread) return;
@@ -433,6 +460,7 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     if (!thread) return;
     runningRef.current = true;
     setBusy(true);
+    setNeedsResume(false);
     const controller = new AbortController();
     abortRef.current = controller;
     bgAbortRef.current = false;
@@ -473,18 +501,25 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
       resetStream();
       const replyId = pushMessage("model", result.reply);
       if (wasVoice) startSpeak(replyId, result.reply);
+      // Finished while the user was away → ping them their reply is ready.
+      if (AppState.currentState !== "active") void notifyTurnDone(updated.title, result.reply);
     } catch (err) {
       const aborted = err instanceof AbortedError || (err as Error)?.name === "AbortedError";
       if (interruptRef.current) {
         // Aborted to immediately run a redirect message — no "Stopped" notice.
         interruptRef.current = false;
       } else if (aborted) {
-        pushMessage(
-          "model",
-          bgAbortRef.current
-            ? "Stopped — Fraude was sent to the background. Keep the app open while a task runs."
-            : "Stopped."
-        );
+        if (bgAbortRef.current) {
+          // Background-run is off and the app was backgrounded — offer to resume.
+          pushMessage(
+            "model",
+            "Paused — Fraude was sent to the background. Turn on “Keep working in the background” in Settings, or continue now.",
+            undefined,
+            true
+          );
+        } else {
+          pushMessage("model", "Stopped.");
+        }
       } else {
         // Surface the error with a manual retry (no auto-retry — saves quota).
         pushMessage("model", String(err instanceof Error ? err.message : err), undefined, true);
@@ -604,6 +639,13 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
             {queuedCount > 0 ? `  ·  ${queuedCount} queued` : ""}
           </Text>
         </View>
+      ) : null}
+
+      {needsResume && !busy ? (
+        <TouchableOpacity style={styles.resumeBanner} onPress={resumeTurn}>
+          <Ionicons name="play" size={16} color={theme.bg} />
+          <Text style={styles.resumeText}>Continue this answer</Text>
+        </TouchableOpacity>
       ) : null}
 
       {pendingImage ? (
@@ -751,6 +793,20 @@ const styles = StyleSheet.create({
   },
   noticeText: { color: theme.accent, fontSize: 13, textAlign: "center", lineHeight: 19 },
   statusRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 6, gap: 8 },
+  resumeBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    alignSelf: "center",
+    backgroundColor: theme.accent,
+    borderRadius: 20,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    marginHorizontal: 16,
+    marginBottom: 6,
+  },
+  resumeText: { color: theme.bg, fontWeight: "700", fontSize: 14 },
   statusText: { color: theme.textDim, fontSize: 13, fontStyle: "italic", flex: 1 },
   composer: {
     margin: 10,

@@ -58,7 +58,8 @@
         {
           "photosPermission": "Allow Fraude to attach photos to your messages."
         }
-      ]
+      ],
+      "expo-notifications"
     ]
   }
 }
