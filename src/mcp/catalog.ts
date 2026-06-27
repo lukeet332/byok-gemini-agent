@@ -12,13 +12,17 @@ export interface McpCatalogEntry {
   auth: McpAuth;
 }
 
+// Curated for mobile: high-value, hosted (no self-host), genuinely useful on a
+// phone. (Native GitHub tools already cover GitHub, so no GitHub MCP here.)
+// Aggregators with per-user URLs — Zapier, Pipedream, Composio — are best added
+// via the custom-server form. URLs are best-effort and may need updating.
 export const MCP_CATALOG: McpCatalogEntry[] = [
-  { id: "deepwiki", name: "DeepWiki (public docs)", url: "https://mcp.deepwiki.com/mcp", auth: "none" },
-  { id: "huggingface", name: "Hugging Face", url: "https://huggingface.co/mcp", auth: "token" },
-  { id: "github", name: "GitHub", url: "https://api.githubcopilot.com/mcp/", auth: "token" },
-  { id: "linear", name: "Linear", url: "https://mcp.linear.app/sse", auth: "oauth" },
+  { id: "context7", name: "Context7 — live docs", url: "https://mcp.context7.com/mcp", auth: "none" },
+  { id: "deepwiki", name: "DeepWiki — repo Q&A", url: "https://mcp.deepwiki.com/mcp", auth: "none" },
   { id: "notion", name: "Notion", url: "https://mcp.notion.com/mcp", auth: "oauth" },
+  { id: "linear", name: "Linear", url: "https://mcp.linear.app/mcp", auth: "oauth" },
   { id: "sentry", name: "Sentry", url: "https://mcp.sentry.dev/mcp", auth: "oauth" },
+  { id: "atlassian", name: "Atlassian — Jira/Confluence", url: "https://mcp.atlassian.com/v1/sse", auth: "oauth" },
   { id: "stripe", name: "Stripe", url: "https://mcp.stripe.com", auth: "token" },
-  { id: "atlassian", name: "Atlassian", url: "https://mcp.atlassian.com/v1/sse", auth: "oauth" },
+  { id: "huggingface", name: "Hugging Face", url: "https://huggingface.co/mcp", auth: "token" },
 ];

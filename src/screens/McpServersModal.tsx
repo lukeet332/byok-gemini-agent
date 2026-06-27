@@ -14,7 +14,7 @@ import {
   View,
 } from "react-native";
 
-import { McpCatalogEntry } from "../mcp/catalog";
+import { McpAuth, McpCatalogEntry, MCP_CATALOG } from "../mcp/catalog";
 import * as Store from "../mcp/McpStore";
 import * as Client from "../mcp/McpClient";
 import { oauthConnect } from "../mcp/McpOAuth";
@@ -27,6 +27,34 @@ export default function McpServersModal({ visible, onClose }: { visible: boolean
   const [tokenFor, setTokenFor] = useState<McpCatalogEntry | null>(null);
   const [tokenInput, setTokenInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [nName, setNName] = useState("");
+  const [nUrl, setNUrl] = useState("");
+  const [nAuth, setNAuth] = useState<McpAuth>("oauth");
+  const catalogIds = new Set(MCP_CATALOG.map((c) => c.id));
+
+  async function addCustom() {
+    const name = nName.trim();
+    const url = nUrl.trim();
+    if (!name || !/^https?:\/\//i.test(url)) {
+      setError("Enter a name and a full https:// URL.");
+      return;
+    }
+    const id = "custom-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    await Store.addCustom({ id, name, url, auth: nAuth });
+    setAdding(false);
+    setNName("");
+    setNUrl("");
+    setNAuth("oauth");
+    setError(null);
+    await refresh();
+  }
+
+  async function removeServer(server: McpCatalogEntry) {
+    await Store.removeCustom(server.id);
+    Client.disconnectClient(server.id);
+    await refresh();
+  }
 
   async function refresh() {
     setServers(await Store.allServers());
@@ -102,6 +130,9 @@ export default function McpServersModal({ visible, onClose }: { visible: boolean
                   <TouchableOpacity
                     style={styles.row}
                     onPress={() => (isOn ? onDisconnect(s) : onConnect(s))}
+                    onLongPress={() => {
+                      if (!catalogIds.has(s.id)) removeServer(s); // remove a custom server
+                    }}
                     disabled={busy}
                   >
                     <Text style={styles.rowName}>{s.name}</Text>
@@ -153,6 +184,55 @@ export default function McpServersModal({ visible, onClose }: { visible: boolean
                 </View>
               );
             })}
+
+            {adding ? (
+              <View style={styles.addBox}>
+                <Text style={styles.tokenHint}>Add a custom MCP server (e.g. your self-hosted Google Workspace server):</Text>
+                <TextInput
+                  style={styles.tokenInput}
+                  value={nName}
+                  onChangeText={setNName}
+                  placeholder="Name (e.g. Google Workspace)"
+                  placeholderTextColor={theme.textDim}
+                  autoCorrect={false}
+                />
+                <TextInput
+                  style={[styles.tokenInput, { marginTop: 8 }]}
+                  value={nUrl}
+                  onChangeText={setNUrl}
+                  placeholder="https://your-server/mcp"
+                  placeholderTextColor={theme.textDim}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <View style={styles.authChips}>
+                  {(["oauth", "token", "none"] as McpAuth[]).map((a) => (
+                    <TouchableOpacity
+                      key={a}
+                      style={[styles.authChip, nAuth === a && styles.authChipOn]}
+                      onPress={() => setNAuth(a)}
+                    >
+                      <Text style={[styles.authChipText, nAuth === a && styles.authChipTextOn]}>
+                        {a === "oauth" ? "OAuth" : a === "token" ? "Token" : "No auth"}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <View style={styles.tokenActions}>
+                  <TouchableOpacity onPress={() => setAdding(false)}>
+                    <Text style={styles.tokenCancel}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={addCustom}>
+                    <Text style={styles.tokenSave}>Add</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.addServerBtn} onPress={() => setAdding(true)}>
+                <Text style={styles.addServerText}>＋ Add custom server</Text>
+              </TouchableOpacity>
+            )}
+            <Text style={styles.removeHint}>Long-press a custom server to remove it.</Text>
           </ScrollView>
         </View>
       </View>
@@ -210,4 +290,13 @@ const styles = StyleSheet.create({
   tokenActions: { flexDirection: "row", justifyContent: "flex-end", gap: 20, marginTop: 10 },
   tokenCancel: { color: theme.textDim, fontWeight: "600" },
   tokenSave: { color: theme.accent, fontWeight: "700" },
+  addBox: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.border, borderRadius: 12, padding: 12, marginTop: 6 },
+  authChips: { flexDirection: "row", gap: 8, marginTop: 10 },
+  authChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 14, borderWidth: 1, borderColor: theme.border },
+  authChipOn: { borderColor: theme.accent, backgroundColor: theme.surfaceAlt },
+  authChipText: { color: theme.textDim, fontSize: 13 },
+  authChipTextOn: { color: theme.accent, fontWeight: "700" },
+  addServerBtn: { borderWidth: 1, borderStyle: "dashed", borderColor: theme.border, borderRadius: 12, paddingVertical: 14, alignItems: "center", marginTop: 6 },
+  addServerText: { color: theme.accent, fontWeight: "700", fontSize: 14 },
+  removeHint: { color: theme.textDim, fontSize: 12, textAlign: "center", marginTop: 12 },
 });
