@@ -63,58 +63,13 @@ jobs:
           path: out/byok-gemini-agent.apk
           if-no-files-found: error
 
-  # ---- iOS: prebuild + xcodebuild -> UNSIGNED .ipa ----
-  # A real, installable IPA requires Apple signing (certificate + provisioning
-  # profile). This produces an unsigned archive useful for inspection or
-  # re-signing with sideloading tooling. See README for adding signing/EAS.
-  ios:
-    needs: verify
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-      - name: Install dependencies
-        run: npm ci
-      - name: Generate native iOS project
-        run: npx expo prebuild --platform ios --no-install
-      - name: Install CocoaPods
-        run: pod install
-        working-directory: ios
-      - name: Archive (unsigned)
-        run: |
-          WORKSPACE=$(ls ios/*.xcworkspace | head -1)
-          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
-          echo "Workspace=$WORKSPACE Scheme=$SCHEME"
-          xcodebuild \
-            -workspace "$WORKSPACE" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -archivePath "$RUNNER_TEMP/app.xcarchive" \
-            archive \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
-      - name: Package unsigned IPA
-        run: |
-          APP=$(ls -d "$RUNNER_TEMP/app.xcarchive/Products/Applications/"*.app | head -1)
-          mkdir -p "$RUNNER_TEMP/Payload"
-          cp -R "$APP" "$RUNNER_TEMP/Payload/"
-          mkdir -p out
-          (cd "$RUNNER_TEMP" && zip -qry ipa.zip Payload)
-          cp "$RUNNER_TEMP/ipa.zip" out/byok-gemini-agent-unsigned.ipa
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ios-ipa
-          path: out/byok-gemini-agent-unsigned.ipa
-          if-no-files-found: error
-
-  # ---- Publish a GitHub Release with both binaries attached ----
+  # ---- Publish a GitHub Release with the APK attached ----
+  # iOS is intentionally dropped for now: a real installable IPA needs Apple
+  # signing, and the unsigned archive isn't useful to install. Re-add a `macos`
+  # job later (note: use `ls -d ios/*.xcworkspace` — the .xcworkspace is a
+  # directory, so plain `ls` lists its contents, not the bundle path).
   release:
-    needs: [android, ios]
+    needs: [android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -129,4 +84,3 @@ jobs:
           generate_release_notes: true
           files: |
             dist/byok-gemini-agent.apk
-            dist/byok-gemini-agent-unsigned.ipa

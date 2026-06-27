@@ -10,7 +10,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#0b0f14"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.lukeet332.byokgeminiagent"
@@ -19,6 +21,9 @@
       "package": "com.lukeet332.byokgeminiagent",
       "edgeToEdgeEnabled": true
     },
-    "plugins": ["expo-secure-store"]
+    "plugins": [
+      "expo-secure-store",
+      "expo-asset"
+    ]
   }
 }

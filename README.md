@@ -81,19 +81,20 @@ That's it — the loop discovers and dispatches it automatically.
 ## Builds & releases (CI)
 
 `.github/workflows/release.yml` runs on every push to `main` (and via the Actions
-tab). It:
+tab). It runs **entirely on GitHub-hosted runners** — no Expo/EAS servers. It:
 
 1. Typechecks (`tsc --noEmit`).
-2. **Android** — `expo prebuild` + Gradle `assembleRelease` → an installable APK
-   (signed with the standard debug key from the Expo template).
-3. **iOS** — `expo prebuild` + `xcodebuild archive` → an **unsigned** `.ipa`.
-4. Publishes a **GitHub Release** (`v1.0.<run-number>`) with both attached.
+2. **Android** — `expo prebuild` (generates the native `android/` project) +
+   Gradle `assembleRelease` → an installable APK (signed with the standard debug
+   key from the Expo template).
+3. Publishes a **GitHub Release** (`v1.0.<run-number>`) with the APK attached.
 
-> The iOS artifact is unsigned, so it is **not** directly installable. A real
-> signed IPA needs an Apple Developer certificate + provisioning profile. To get
-> one, either add fastlane/match signing to the `ios` job, or switch that job to
-> [EAS Build](https://docs.expo.dev/build/introduction/) with an `EXPO_TOKEN`
-> secret. The Android APK is installable as-is.
+> **iOS is intentionally not built** right now. A real installable IPA needs an
+> Apple Developer certificate + provisioning profile, and an *unsigned* archive
+> isn't useful to install. To add it later, re-introduce a `macos-14` job running
+> `xcodebuild archive` with signing (fastlane/match) — and note the gotcha: a
+> `.xcworkspace` is a directory, so resolve it with `ls -d ios/*.xcworkspace`,
+> not plain `ls` (which lists the bundle's contents).
 
 ## Security notes
 
