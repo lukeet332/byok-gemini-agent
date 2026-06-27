@@ -22,7 +22,9 @@
     "android": {
       "package": "com.lukeet332.byokgeminiagent",
       "edgeToEdgeEnabled": true,
-      "permissions": ["android.permission.QUERY_ALL_PACKAGES"],
+      "permissions": [
+        "android.permission.QUERY_ALL_PACKAGES"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0b0f14"
@@ -44,9 +46,12 @@
         {
           "microphonePermission": "Allow the app to use the microphone for voice input.",
           "speechRecognitionPermission": "Allow the app to recognise your speech for voice input.",
-          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
         }
-      ]
+      ],
+      "expo-font"
     ]
   }
 }

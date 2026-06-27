@@ -21,6 +21,7 @@ import {
   View,
 } from "react-native";
 import Markdown from "react-native-markdown-display";
+import { Ionicons } from "@expo/vector-icons";
 import * as Speech from "expo-speech";
 import {
   ExpoSpeechRecognitionModule,
@@ -110,6 +111,8 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   const abortRef = useRef<AbortController | null>(null);
   const bgAbortRef = useRef(false);
   const busyRef = useRef(false);
+  // True when the pending message was dictated (so we read the reply aloud).
+  const voiceInputRef = useRef(false);
 
   // Keep a ref in sync so AppState/back handlers see the latest busy state.
   useEffect(() => {
@@ -159,7 +162,10 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   // Speech-to-text: stream the transcript into the input box.
   useSpeechRecognitionEvent("result", (e) => {
     const t = e.results?.[0]?.transcript;
-    if (typeof t === "string") setInput(t);
+    if (typeof t === "string") {
+      setInput(t);
+      voiceInputRef.current = true; // dictated → reply will be spoken
+    }
   });
   useSpeechRecognitionEvent("end", () => setListening(false));
   useSpeechRecognitionEvent("error", () => setListening(false));
@@ -177,21 +183,24 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     ExpoSpeechRecognitionModule.start({ lang: "en-GB", interimResults: true });
   }
 
-  // Text-to-speech: read a model reply aloud (British English by default).
+  // Text-to-speech: read a reply aloud (British English by default).
+  function startSpeak(id: string, text: string) {
+    Speech.stop();
+    setSpeakingId(id);
+    Speech.speak(plainText(text), {
+      language: "en-GB",
+      onDone: () => setSpeakingId(null),
+      onStopped: () => setSpeakingId(null),
+      onError: () => setSpeakingId(null),
+    });
+  }
   function speak(msg: ChatMessage) {
     if (speakingId === msg.id) {
       Speech.stop();
       setSpeakingId(null);
       return;
     }
-    Speech.stop();
-    setSpeakingId(msg.id);
-    Speech.speak(plainText(msg.text), {
-      language: "en-GB",
-      onDone: () => setSpeakingId(null),
-      onStopped: () => setSpeakingId(null),
-      onError: () => setSpeakingId(null),
-    });
+    startSpeak(msg.id, msg.text);
   }
 
   useEffect(() => {
@@ -211,15 +220,19 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
   }
 
-  function pushMessage(role: ChatMessage["role"], text: string, action?: ChatMessage["action"]) {
-    setMessages((prev) => [...prev, { id: nextId(), role, text, action }]);
+  function pushMessage(role: ChatMessage["role"], text: string, action?: ChatMessage["action"]): string {
+    const id = nextId();
+    setMessages((prev) => [...prev, { id, role, text, action }]);
     scrollToEnd();
+    return id;
   }
 
   async function handleSendMessage(userPrompt: string) {
     const prompt = userPrompt.trim();
     if (!prompt || busy || !thread) return;
 
+    const wasVoice = voiceInputRef.current;
+    voiceInputRef.current = false;
     setInput("");
     setBusy(true);
     pushMessage("user", prompt);
@@ -263,7 +276,8 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
       setThread(updated);
       await saveThread(updated);
       onThreadChanged();
-      pushMessage("model", result.reply);
+      const replyId = pushMessage("model", result.reply);
+      if (wasVoice) startSpeak(replyId, result.reply); // spoke the question → speak the answer
     } catch (err) {
       const aborted = err instanceof AbortedError || (err as Error)?.name === "AbortedError";
       if (aborted) {
@@ -309,8 +323,12 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
         <Markdown style={mdStyles} rules={mdRules}>
           {withInlineImages(item.text)}
         </Markdown>
-        <TouchableOpacity onPress={() => speak(item)} style={styles.speakBtn} hitSlop={8}>
-          <Text style={styles.speakText}>{speakingId === item.id ? "■ Stop" : "🔊 Listen"}</Text>
+        <TouchableOpacity onPress={() => speak(item)} style={styles.speakBtn} hitSlop={10}>
+          <Ionicons
+            name={speakingId === item.id ? "stop-circle" : "volume-high-outline"}
+            size={20}
+            color={speakingId === item.id ? theme.accent : theme.textDim}
+          />
         </TouchableOpacity>
       </View>
     );
@@ -363,30 +381,33 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
         <TextInput
           style={styles.input}
           value={input}
-          onChangeText={setInput}
+          onChangeText={(t) => {
+            setInput(t);
+            voiceInputRef.current = false; // typed → don't auto-speak the reply
+          }}
           placeholder={listening ? "Listening…" : "Message"}
           placeholderTextColor={theme.textDim}
           multiline
           editable={!busy}
         />
         <TouchableOpacity
-          style={[styles.micBtn, listening && styles.micActive]}
+          style={[styles.iconBtn, listening ? styles.micActive : styles.iconBtnGhost]}
           onPress={toggleMic}
           disabled={busy}
         >
-          <Text style={styles.micText}>{listening ? "●" : "🎤"}</Text>
+          <Ionicons name={listening ? "stop" : "mic"} size={22} color={listening ? "#fff" : theme.accent} />
         </TouchableOpacity>
         {busy ? (
-          <TouchableOpacity style={styles.stopBtn} onPress={() => abortRef.current?.abort()}>
-            <Text style={styles.stopText}>■ Stop</Text>
+          <TouchableOpacity style={[styles.iconBtn, styles.stopBtn]} onPress={() => abortRef.current?.abort()}>
+            <Ionicons name="square" size={18} color="#fff" />
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
-            style={[styles.sendBtn, !input.trim() && styles.sendBtnDisabled]}
+            style={[styles.iconBtn, styles.sendBtn, !input.trim() && styles.sendBtnDisabled]}
             onPress={() => handleSendMessage(input)}
             disabled={!input.trim()}
           >
-            <Text style={styles.sendText}>Send</Text>
+            <Ionicons name="arrow-up" size={22} color={theme.bg} />
           </TouchableOpacity>
         )}
       </View>
@@ -453,26 +474,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: Platform.OS === "ios" ? 10 : 6,
   },
-  sendBtn: { backgroundColor: theme.accent, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 12, justifyContent: "center" },
+  iconBtn: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+  iconBtnGhost: { backgroundColor: theme.surfaceAlt, borderWidth: 1, borderColor: theme.border },
+  sendBtn: { backgroundColor: theme.accent },
   sendBtnDisabled: { opacity: 0.45 },
-  sendText: { color: theme.bg, fontWeight: "700", fontSize: 15 },
-  stopBtn: { backgroundColor: theme.danger, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 12, justifyContent: "center" },
-  stopText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  stopBtn: { backgroundColor: theme.danger },
+  micActive: { backgroundColor: theme.danger },
   keepOpen: { color: theme.textDim, fontSize: 11, textAlign: "center", paddingHorizontal: 16, paddingBottom: 4 },
   speakBtn: { alignSelf: "flex-start", marginTop: 6 },
-  speakText: { color: theme.textDim, fontSize: 12, fontWeight: "600" },
-  micBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: theme.surfaceAlt,
-    borderWidth: 1,
-    borderColor: theme.border,
-  },
-  micActive: { backgroundColor: theme.danger, borderColor: theme.danger },
-  micText: { color: theme.text, fontSize: 18 },
 });
 
 // Dark-theme markdown styling for model replies.

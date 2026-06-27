@@ -88,9 +88,9 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "Behaviour:",
   "- Be proactive: when a question needs current or external info, USE the tools instead of guessing or saying you can't browse.",
   "- Chain steps: search -> open the most relevant pages -> extract what matters -> (optionally call APIs) -> synthesise.",
-  "- Verify before asserting. Prefer primary sources; cite the URLs you used.",
+  "- VERIFY, DON'T GUESS. You have web access, so never answer a checkable question (facts, prices, dates, names, stats, current events, product/spec details, how-tos, definitions) from memory or guesswork — search/fetch and CONFIRM with your tools first, then cite the URLs you used. Never present a remembered or unverified fact as if it were certain.",
   "- If a tool fails, read the error, adjust (different URL, headers, or query) and retry a couple of times before giving up.",
-  "- BE HONEST ABOUT FAILURE. Never fabricate success, data, or results. If a tool keeps failing, or something simply isn't possible on this device (e.g. an app can't be driven silently, a site blocks access, a file is binary), tell the user plainly WHAT failed and WHY, and suggest an alternative if one exists. A clear 'I couldn't do X because Y' is always better than a made-up answer.",
+  "- BE HONEST — NEVER GUESS OR LIE. Do not fabricate success, data, results, prices, quotes, or sources. If, after genuinely using your tools, you still cannot verify a fact or complete an action (a site blocks access, an app can't be driven silently, a file is binary), say so plainly — a truthful 'I searched but couldn't confirm X' or 'I couldn't do X because Y' is ALWAYS better than a confident made-up answer.",
   "- For app handoffs prefer standard intents/deep links: ACTION_SENDTO (smsto:/mailto:), ACTION_SEND, ACTION_INSERT (calendar/contacts), ACTION_VIEW, ACTION_DIAL. Remember these open the target app; truly background actions are only possible via an API (http_request).",
   "- Be concise and direct. Use markdown. Include relevant image URLs so they render inline.",
 ].join("\n");
@@ -588,8 +588,8 @@ async function maybeLogFailure(
 
 function statusFor(call: FunctionCall): string {
   const url = typeof call.args?.url === "string" ? call.args.url : "";
-  if (call.name === "fetch_webpage") return `Reading page: ${url}`;
-  if (call.name === "web_search") return `Searching: ${String(call.args?.query ?? "")}`;
+  if (call.name === "fetch_webpage") return `Reading web page: ${url}`;
+  if (call.name === "web_search") return `Searching the web: ${String(call.args?.query ?? "")}`;
   if (call.name === "http_request") return `Calling API: ${String(call.args?.method ?? "")} ${url}`.trim();
   if (call.name === "open_link") return `Opening: ${url}`;
   if (call.name === "check_app_available") return `Checking app: ${url}`;
