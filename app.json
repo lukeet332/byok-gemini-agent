@@ -22,6 +22,7 @@
     "android": {
       "package": "com.lukeet332.byokgeminiagent",
       "edgeToEdgeEnabled": true,
+      "permissions": ["android.permission.QUERY_ALL_PACKAGES"],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0b0f14"

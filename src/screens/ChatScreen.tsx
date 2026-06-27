@@ -142,16 +142,15 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   }, []);
 
   function confirmWrite({ method, url }: { method: string; url: string }): Promise<boolean> {
+    const body =
+      method === "INTENT"
+        ? `The assistant wants to hand off to another app:\n\n${url}\n\nAllow it?`
+        : `The assistant wants to send a ${method} request to:\n\n${url}\n\nThis can change data. Allow it?`;
     return new Promise((resolve) => {
-      Alert.alert(
-        "Confirm action",
-        `The assistant wants to send a ${method} request to:\n\n${url}\n\nThis can change data. Allow it?`,
-        [
-          { text: "Decline", style: "cancel", onPress: () => resolve(false) },
-          { text: "Allow", onPress: () => resolve(true) },
-        ],
-        { cancelable: false }
-      );
+      Alert.alert("Confirm action", body, [
+        { text: "Decline", style: "cancel", onPress: () => resolve(false) },
+        { text: "Allow", onPress: () => resolve(true) },
+      ], { cancelable: false });
     });
   }
 

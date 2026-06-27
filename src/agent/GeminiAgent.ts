@@ -11,6 +11,7 @@ import { Content, FunctionCall, Part, Tool } from "../types";
 import { getGeminiKey, getModel, getSecretValue, getSystemPrompt, listSecretNames } from "../storage/SecureStorage";
 import { appendError } from "../storage/ErrorLogStore";
 import { BrowserEngine } from "../browser/BrowserEngine";
+import * as Device from "../device/DeviceTools";
 
 // Default model + the presets offered in Settings. Users can also type any
 // model id (e.g. a newer one) as a custom value.
@@ -78,6 +79,9 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "- web_search(query): search the web; returns top results with readable content.",
   "- fetch_webpage(url): read a specific page as clean text.",
   "- http_request(method,url,headers,body): call ANY API. Authenticate by putting {{SECRET_NAME}} in the url/headers/body — values are substituted on-device; you never see them.",
+  "- Device / other apps: check_app_available(url-or-scheme), open_link(url or deep link), share_content(text), clipboard_get(), clipboard_set(text), send_android_intent(...).",
+  "",
+  "Acting on the phone: to use another app (e.g. send a WhatsApp message), FIRST check_app_available (e.g. 'whatsapp://'), then format that app's deep link yourself (e.g. https://wa.me/<number>?text=...) and open_link it, or use send_android_intent for advanced handoffs. Use clipboard_set to hand the user text to paste anywhere.",
   "",
   "Behaviour:",
   "- Be proactive: when a question needs current or external info, USE the tools instead of guessing or saying you can't browse.",
@@ -147,6 +151,72 @@ export const TOOLS: Tool[] = [
           required: ["query"],
         },
       },
+      {
+        name: "check_app_available",
+        description:
+          "Check whether an installed app can handle a URL or scheme on this device " +
+          "(e.g. 'whatsapp://', 'spotify:', 'https://wa.me/'). Use this to discover " +
+          "what apps/handoffs are possible before acting.",
+        parameters: {
+          type: "object",
+          properties: { url: { type: "string", description: "A URL or app scheme to test." } },
+          required: ["url"],
+        },
+      },
+      {
+        name: "open_link",
+        description:
+          "Open a URL or app deep link on the device — handing off to the right app. " +
+          "Examples: 'https://wa.me/447700900000?text=Hi' (WhatsApp), 'tel:+44…', " +
+          "'mailto:a@b.com?subject=…&body=…', 'geo:0,0?q=address', 'spotify:track:…'. " +
+          "You generally know each app's deep-link format; format it yourself.",
+        parameters: {
+          type: "object",
+          properties: { url: { type: "string", description: "The URL / deep link to open." } },
+          required: ["url"],
+        },
+      },
+      {
+        name: "share_content",
+        description: "Share text to another app via the system share sheet (the user picks the target app).",
+        parameters: {
+          type: "object",
+          properties: { text: { type: "string", description: "The text to share." } },
+          required: ["text"],
+        },
+      },
+      {
+        name: "clipboard_get",
+        description: "Read the device clipboard — use to ingest whatever the user copied from another app.",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        name: "clipboard_set",
+        description: "Write text to the device clipboard so the user can paste it into any other app.",
+        parameters: {
+          type: "object",
+          properties: { text: { type: "string", description: "Text to put on the clipboard." } },
+          required: ["text"],
+        },
+      },
+      {
+        name: "send_android_intent",
+        description:
+          "Advanced Android handoff: fire an intent to another app. Use when a deep " +
+          "link isn't enough — e.g. action 'android.intent.action.SEND' with mimeType " +
+          "'text/plain', package 'com.whatsapp', and text to share to a specific app.",
+        parameters: {
+          type: "object",
+          properties: {
+            action: { type: "string", description: "Intent action, e.g. android.intent.action.SEND or VIEW." },
+            data: { type: "string", description: "Optional data URI." },
+            mimeType: { type: "string", description: "Optional MIME type, e.g. text/plain." },
+            package: { type: "string", description: "Optional target package, e.g. com.whatsapp." },
+            text: { type: "string", description: "Optional text (sent as EXTRA_TEXT)." },
+          },
+          required: ["action"],
+        },
+      },
     ],
   },
 ];
@@ -172,6 +242,22 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
   http_request: executeHttpRequest,
   fetch_webpage: executeFetchWebpage,
   web_search: executeWebSearch,
+  check_app_available: (args) => Device.checkApp(String(args.url ?? "")),
+  open_link: (args) => Device.openLink(String(args.url ?? "")),
+  share_content: (args) => Device.shareContent(String(args.text ?? "")),
+  clipboard_get: async () => ({ ok: true, text: await Device.clipboardGet() }),
+  clipboard_set: async (args) => {
+    await Device.clipboardSet(String(args.text ?? ""));
+    return { ok: true };
+  },
+  send_android_intent: (args) =>
+    Device.sendIntent({
+      action: String(args.action ?? ""),
+      data: typeof args.data === "string" ? args.data : undefined,
+      type: typeof args.mimeType === "string" ? args.mimeType : undefined,
+      packageName: typeof args.package === "string" ? args.package : undefined,
+      text: typeof args.text === "string" ? args.text : undefined,
+    }),
 };
 
 // Stored secret values, used to scrub anything echoed back into the model/logs.
@@ -431,6 +517,12 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "fetch_webpage") return `Reading page: ${url}`;
   if (call.name === "web_search") return `Searching: ${String(call.args?.query ?? "")}`;
   if (call.name === "http_request") return `Calling API: ${String(call.args?.method ?? "")} ${url}`.trim();
+  if (call.name === "open_link") return `Opening: ${url}`;
+  if (call.name === "check_app_available") return `Checking app: ${url}`;
+  if (call.name === "share_content") return "Opening share sheet...";
+  if (call.name === "clipboard_get") return "Reading clipboard...";
+  if (call.name === "clipboard_set") return "Copying to clipboard...";
+  if (call.name === "send_android_intent") return `Handing off to app: ${String(call.args?.package ?? call.args?.action ?? "")}`;
   return `Running tool: ${call.name}...`;
 }
 
@@ -470,11 +562,18 @@ export async function runAgentTurn(
       if (!executor) {
         result = { ok: false, error: `Unknown tool: ${call.name}` };
       } else {
-        // Confirm state-changing API calls before executing them.
+        // Confirm state-changing API calls + app handoffs before executing them.
         const method = String(call.args?.method ?? "GET").toUpperCase();
-        const isWrite = call.name === "http_request" && WRITE_METHODS.has(method);
-        const url = typeof call.args?.url === "string" ? (call.args.url as string) : "";
-        if (isWrite && callbacks.confirmWrite && !(await callbacks.confirmWrite({ method, url }))) {
+        const isHttpWrite = call.name === "http_request" && WRITE_METHODS.has(method);
+        const isIntent = call.name === "send_android_intent";
+        const needsConfirm = isHttpWrite || isIntent;
+        const confirmMethod = isIntent ? "INTENT" : method;
+        const confirmUrl = isIntent
+          ? `${String(call.args?.action ?? "")} ${String(call.args?.package ?? "")}`.trim()
+          : typeof call.args?.url === "string"
+            ? (call.args.url as string)
+            : "";
+        if (needsConfirm && callbacks.confirmWrite && !(await callbacks.confirmWrite({ method: confirmMethod, url: confirmUrl }))) {
           result = { ok: false, error: "The user declined this request. Do not retry it; ask them what to do instead." };
         } else {
           try {
