@@ -28,12 +28,4 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   { id: "atlassian", name: "Atlassian — Jira/Confluence", url: "https://mcp.atlassian.com/v1/sse", auth: "oauth" },
   { id: "stripe", name: "Stripe", url: "https://mcp.stripe.com", auth: "token" },
   { id: "huggingface", name: "Hugging Face", url: "https://huggingface.co/mcp", auth: "token" },
-  {
-    id: "google-workspace",
-    name: "Google Workspace (self-host)",
-    url: "",
-    auth: "oauth",
-    selfHost: true,
-    setupUrl: "https://github.com/taylorwilsdon/google_workspace_mcp",
-  },
 ];
