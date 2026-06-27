@@ -16,12 +16,11 @@ import {
   View,
 } from "react-native";
 
-import { saveGeminiKey, saveJinaKey } from "../storage/SecureStorage";
+import { saveGeminiKey } from "../storage/SecureStorage";
 import { theme } from "../theme";
 
 export default function SetupScreen({ onDone }: { onDone: () => void }) {
   const [geminiKey, setGeminiKey] = useState("");
-  const [jinaKey, setJinaKey] = useState("");
   const [saving, setSaving] = useState(false);
 
   const canContinue = geminiKey.trim().length > 0 && !saving;
@@ -30,7 +29,6 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
     if (!canContinue) return;
     setSaving(true);
     await saveGeminiKey(geminiKey);
-    await saveJinaKey(jinaKey);
     onDone();
   }
 
@@ -59,23 +57,9 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
           <Text style={styles.link}>Get a free Gemini key →</Text>
         </TouchableOpacity>
 
-        <Text style={[styles.label, styles.spaced]}>Jina key (optional)</Text>
-        <Text style={styles.hint}>
-          Enables web search & reading pages. Works without a key; a free key just raises the rate limits.
+        <Text style={styles.note}>
+          Web search & page reading work out of the box — no extra keys needed.
         </Text>
-        <TextInput
-          style={styles.input}
-          value={jinaKey}
-          onChangeText={setJinaKey}
-          placeholder="optional"
-          placeholderTextColor={theme.textDim}
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-        />
-        <TouchableOpacity onPress={() => Linking.openURL("https://jina.ai/api-dashboard/")}>
-          <Text style={styles.link}>Get a free Jina key →</Text>
-        </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.continueBtn, !canContinue && styles.disabled]}
@@ -107,6 +91,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   link: { color: theme.accent, fontSize: 13, fontWeight: "600", marginTop: 8 },
+  note: { color: theme.textDim, fontSize: 13, marginTop: 22, lineHeight: 19 },
   continueBtn: { backgroundColor: theme.accent, borderRadius: 12, paddingVertical: 16, alignItems: "center", marginTop: 34 },
   disabled: { opacity: 0.4 },
   continueText: { color: theme.bg, fontSize: 16, fontWeight: "700" },

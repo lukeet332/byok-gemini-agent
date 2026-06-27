@@ -9,6 +9,7 @@ import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import AnimatedSplash from "./src/screens/AnimatedSplash";
+import HiddenBrowser from "./src/browser/HiddenBrowser";
 import ChatScreen from "./src/screens/ChatScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import SetupScreen from "./src/screens/SetupScreen";
@@ -94,6 +95,9 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar style="light" />
       {body}
+      {/* Mount the hidden browser engine only AFTER the splash, so cold-start
+          WebView init doesn't block first paint (it would flash white). */}
+      {splashDone ? <HiddenBrowser /> : null}
       {!splashDone ? <AnimatedSplash onFinish={() => setSplashDone(true)} /> : null}
     </SafeAreaProvider>
   );

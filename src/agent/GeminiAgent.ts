@@ -8,8 +8,9 @@
 // before a request, so raw secret values never reach the model.
 
 import { Content, FunctionCall, Part, Tool } from "../types";
-import { getGeminiKey, getJinaKey, getModel, getSecretValue, getSystemPrompt, listSecretNames } from "../storage/SecureStorage";
+import { getGeminiKey, getModel, getSecretValue, getSystemPrompt, listSecretNames } from "../storage/SecureStorage";
 import { appendError } from "../storage/ErrorLogStore";
+import { BrowserEngine } from "../browser/BrowserEngine";
 
 // Default model + the presets offered in Settings. Users can also type any
 // model id (e.g. a newer one) as a custom value.
@@ -60,18 +61,13 @@ const MAX_API_CHARS = 8000;
 const MAX_PAGE_CHARS = 16000;
 const MAX_SEARCH_CHARS = 8000;
 
-// Present as a real browser so naive user-agent blocks don't reject us.
+// Present as a real browser so naive user-agent blocks don't reject http_request.
 const BROWSER_UA =
   "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
 const BROWSER_HEADERS: Record<string, string> = {
   "User-Agent": BROWSER_UA,
   "Accept-Language": "en-US,en;q=0.9",
 };
-
-// Jina endpoints give us a JS-rendering reader and a web search with NO key
-// required (a free JINA_KEY secret, if present, just raises rate limits).
-const JINA_READER = "https://r.jina.ai/";
-const JINA_SEARCH = "https://s.jina.ai/";
 
 // The agent's default persona / operating manual. Users can override it in
 // Settings; an empty override falls back to this.
@@ -167,26 +163,6 @@ async function substituteSecrets(text: string): Promise<string> {
   return out;
 }
 
-// Strip HTML to roughly-readable plain text without a parser dependency.
-function htmlToText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<\/(p|div|li|h[1-6]|tr|br|section|article)>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n\s*\n\s*\n+/g, "\n\n")
-    .trim();
-}
-
 type ToolExecutor = (
   args: Record<string, unknown>,
   signal?: AbortSignal
@@ -202,8 +178,7 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
 async function collectSecretValues(): Promise<string[]> {
   const names = await listSecretNames();
   const vals = await Promise.all(names.map(getSecretValue));
-  const jina = await getJinaKey();
-  return [...vals, jina].filter((v): v is string => !!v && v.length >= 4);
+  return vals.filter((v): v is string => !!v && v.length >= 4);
 }
 
 function redactString(text: string, secrets: string[]): string {
@@ -220,12 +195,6 @@ function redactResult(result: Record<string, unknown>, secrets: string[]): Recor
     if (typeof out[k] === "string") out[k] = redactString(out[k] as string, secrets);
   }
   return out;
-}
-
-// Optional Jina auth header to raise free rate limits, if the user stored a key.
-async function jinaHeaders(): Promise<Record<string, string>> {
-  const key = await getJinaKey();
-  return key ? { Authorization: `Bearer ${key}` } : {};
 }
 
 async function executeHttpRequest(
@@ -267,24 +236,15 @@ async function executeHttpRequest(
   }
 }
 
-// Fetch direct, fall back to stripped HTML. Used if the Jina reader is down.
-async function fetchDirect(
-  url: string,
-  signal?: AbortSignal
-): Promise<{ ok: boolean; status: number; text: string }> {
-  const res = await fetch(url, { headers: { ...BROWSER_HEADERS, Accept: "text/html,*/*" }, signal });
-  const raw = await res.text();
-  const looksHtml = /<html|<body|<!doctype/i.test(raw) || (res.headers.get("content-type") ?? "").includes("html");
-  return { ok: res.ok, status: res.status, text: looksHtml ? htmlToText(raw) : raw };
-}
-
+// Read a page in the hidden WebView (JavaScript renders), with offset paging so
+// the model can read past the truncation point.
 async function executeFetchWebpage(
   args: Record<string, unknown>,
   signal?: AbortSignal
 ): Promise<Record<string, unknown>> {
   const url = typeof args.url === "string" ? args.url : "";
   if (!url) return { ok: false, error: "Missing url." };
-  // Optional paging so the model can read past the truncation point.
+  if (signal?.aborted) throw new AbortedError();
   const offset = typeof args.offset === "number" && args.offset > 0 ? Math.floor(args.offset) : 0;
   const page = (t: string) => {
     const slice = t.slice(offset, offset + MAX_PAGE_CHARS);
@@ -292,75 +252,29 @@ async function executeFetchWebpage(
     return more ? slice + `\n...[more — call again with offset ${offset + MAX_PAGE_CHARS}]` : slice;
   };
 
-  // Prefer the JS-rendering reader (handles dynamic, script-heavy pages).
-  let rateLimited = false;
-  try {
-    const res = await fetch(JINA_READER + url, {
-      headers: { ...BROWSER_HEADERS, Accept: "text/plain", ...(await jinaHeaders()) },
-      signal,
-    });
-    const text = await res.text();
-    if (res.status === 429) rateLimited = true;
-    else if (res.ok && text.trim()) return { ok: true, status: res.status, url, content: page(text) };
-  } catch (err) {
-    if (signal?.aborted) throw err;
-    // else fall through to direct
-  }
-
-  // Fallback: direct fetch + HTML strip.
-  try {
-    const d = await fetchDirect(url, signal);
-    return { ok: d.ok, status: d.status, url, content: page(d.text), ...(rateLimited ? { rateLimited: true, provider: "jina" } : {}) };
-  } catch (err) {
-    return { ok: false, error: `Could not fetch page: ${String(err)}`, ...(rateLimited ? { rateLimited: true, provider: "jina" } : {}) };
-  }
+  const r = await BrowserEngine.fetchPage(url, { signal });
+  if (signal?.aborted) throw new AbortedError();
+  if (!r.ok) return { ok: false, url, error: r.error ?? "Could not load page." };
+  return { ok: true, url, title: r.title, content: page(r.text ?? "") };
 }
 
-// Keyless fallback search: DuckDuckGo's no-JS HTML endpoint (titles/snippets/links).
-async function ddgSearch(
-  query: string,
-  signal?: AbortSignal
-): Promise<{ ok: boolean; status: number; text: string }> {
-  const res = await fetch("https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query), {
-    headers: { ...BROWSER_HEADERS, Accept: "text/html,*/*" },
-    signal,
-  });
-  const raw = await res.text();
-  return { ok: res.ok, status: res.status, text: htmlToText(raw) };
-}
-
+// Search the web via the hidden WebView loading DuckDuckGo, returning structured
+// results (title / url / snippet).
 async function executeWebSearch(
   args: Record<string, unknown>,
   signal?: AbortSignal
 ): Promise<Record<string, unknown>> {
   const query = typeof args.query === "string" ? args.query.trim() : "";
   if (!query) return { ok: false, error: "Missing query." };
-  const clip = (t: string) => (t.length > MAX_SEARCH_CHARS ? t.slice(0, MAX_SEARCH_CHARS) + "\n...[truncated]" : t);
+  if (signal?.aborted) throw new AbortedError();
 
-  // Primary: Jina search (results + readable content).
-  let rateLimited = false;
-  try {
-    const res = await fetch(JINA_SEARCH + encodeURIComponent(query), {
-      headers: { ...BROWSER_HEADERS, Accept: "text/plain", ...(await jinaHeaders()) },
-      signal,
-    });
-    const text = await res.text();
-    if (res.status === 429) rateLimited = true;
-    else if (res.ok && text.trim()) return { ok: true, status: res.status, query, source: "jina", results: clip(text) };
-  } catch (err) {
-    if (signal?.aborted) throw err;
-    // else fall through to DuckDuckGo
-  }
-
-  // Fallback: DuckDuckGo HTML (keyless, links + snippets).
-  const rl = rateLimited ? { rateLimited: true, provider: "jina" } : {};
-  try {
-    const d = await ddgSearch(query, signal);
-    if (d.ok && d.text.trim()) return { ok: true, status: d.status, query, source: "duckduckgo", results: clip(d.text), ...rl };
-    return { ok: false, status: d.status, error: `Search failed (${d.status}).`, ...rl };
-  } catch (err) {
-    return { ok: false, error: `Search error: ${String(err)}`, ...rl };
-  }
+  const r = await BrowserEngine.search(query, { signal });
+  if (signal?.aborted) throw new AbortedError();
+  if (!r.ok) return { ok: false, query, error: r.error ?? "Search failed." };
+  const results = (r.results ?? [])
+    .map((x, i) => `${i + 1}. ${x.title}\n${x.url}\n${x.snippet}`)
+    .join("\n\n");
+  return { ok: true, query, results: results || "No results found." };
 }
 
 // ---- Gemini call ----
@@ -476,8 +390,6 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export interface AgentResult {
   contents: Content[];
   reply: string;
-  // True if a Jina (search/reader) call hit the keyless rate limit this turn.
-  jinaRateLimited?: boolean;
 }
 // Context for attributing error-log entries to the originating chat.
 export interface AgentContext {
@@ -536,7 +448,6 @@ export async function runAgentTurn(
   const systemInstruction = await buildSystemInstruction(memo);
   const secrets = await collectSecretValues();
   const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-  let jinaRateLimited = false;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     if (signal?.aborted) throw new AbortedError();
@@ -547,7 +458,7 @@ export async function runAgentTurn(
     const calls = functionCallsIn(modelTurn);
     if (calls.length === 0) {
       setStatus(null);
-      return { contents: history, reply: textIn(modelTurn) || "(no response)", jinaRateLimited };
+      return { contents: history, reply: textIn(modelTurn) || "(no response)" };
     }
 
     const responseParts: Part[] = [];
@@ -574,7 +485,6 @@ export async function runAgentTurn(
           }
         }
       }
-      if (result.rateLimited === true) jinaRateLimited = true;
       result = redactResult(result, secrets);
       await maybeLogFailure(call, result, ctx);
       responseParts.push({ functionResponse: { name: call.name, response: result } });
@@ -601,7 +511,7 @@ export async function runAgentTurn(
   ];
   const summary = await callGemini(nudge, systemInstruction, signal, false);
   setStatus(null);
-  return { contents: history, reply: textIn(summary) || "(stopped after reaching the tool limit)", jinaRateLimited };
+  return { contents: history, reply: textIn(summary) || "(stopped after reaching the tool limit)" };
 }
 
 // Render structured turns into compact text for the summariser to read.

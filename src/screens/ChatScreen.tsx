@@ -263,13 +263,6 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
       await saveThread(updated);
       onThreadChanged();
       pushMessage("model", result.reply);
-      if (result.jinaRateLimited) {
-        pushMessage(
-          "model",
-          "Web search/reading hit the free Jina rate limit. Tap here to add a free Jina key in Settings for higher limits.",
-          "open_settings"
-        );
-      }
     } catch (err) {
       const aborted = err instanceof AbortedError || (err as Error)?.name === "AbortedError";
       if (aborted) {

@@ -20,13 +20,11 @@ import {
 
 import {
   getGeminiKey,
-  getJinaKey,
   getModel,
   getSystemPrompt,
   loadSecrets,
   normalizeSecretName,
   saveAll,
-  saveJinaKey,
   saveModel,
   saveSystemPrompt,
   NamedSecret,
@@ -50,7 +48,6 @@ function when(ts: number): string {
 
 export default function SettingsScreen() {
   const [geminiKey, setGeminiKey] = useState("");
-  const [jinaKey, setJinaKey] = useState("");
   const [model, setModel] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [secrets, setSecrets] = useState<NamedSecret[]>([]);
@@ -67,7 +64,6 @@ export default function SettingsScreen() {
   useEffect(() => {
     (async () => {
       setGeminiKey(await getGeminiKey());
-      setJinaKey(await getJinaKey());
       setModel(await getModel());
       setSystemPrompt(await getSystemPrompt());
       setSecrets(await loadSecrets());
@@ -108,7 +104,6 @@ export default function SettingsScreen() {
     setStatus(null);
     try {
       await saveAll(geminiKey, secrets);
-      await saveJinaKey(jinaKey);
       await saveModel(model);
       await saveSystemPrompt(systemPrompt);
       setStatus("Saved securely on this device.");
@@ -181,22 +176,6 @@ export default function SettingsScreen() {
           autoCapitalize="none"
           autoCorrect={false}
         />
-
-        <Text style={styles.sectionLabel}>Jina key (optional)</Text>
-        <Text style={styles.hint}>
-          Powers web search + reading pages. Works without a key; adding a free key raises the rate limits.
-        </Text>
-        <TextInput
-          style={styles.input}
-          value={jinaKey}
-          onChangeText={setJinaKey}
-          placeholder="not set"
-          placeholderTextColor={theme.textDim}
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry
-        />
-        <Link label="Get a free Jina key →" url="https://jina.ai/api-dashboard/" />
 
         <Text style={styles.sectionLabel}>Your API secrets</Text>
         <Text style={styles.hint}>
