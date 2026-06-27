@@ -134,6 +134,14 @@ export function isMcpTool(name: string): boolean {
   return name.startsWith("mcp__");
 }
 
+// Human-readable summary of connected servers + their tool counts, for the
+// system prompt so the model knows which integrations are live.
+export function connectedSummary(): string {
+  const parts: string[] = [];
+  for (const [id, conn] of conns) parts.push(`${id} (${conn.tools.length} tools)`);
+  return parts.join(", ");
+}
+
 export async function callMcpTool(fullName: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
   const parts = fullName.split("__");
   const id = parts[1];

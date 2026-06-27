@@ -558,7 +558,12 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
       ? `\n\nDense memory of earlier conversation (your own notes, may be terse):\n${memo.trim()}`
       : "";
 
-  return { role: "user", parts: [{ text: base + secretsLine + memoBlock }] };
+  const mcp = McpClient.connectedSummary();
+  const mcpLine = mcp
+    ? `\n\nConnected MCP integrations — their tools are available to you (named mcp__<server>__<tool>); USE them whenever the request relates to that service: ${mcp}.`
+    : "";
+
+  return { role: "user", parts: [{ text: base + secretsLine + mcpLine + memoBlock }] };
 }
 
 // Single attempt — NO auto-retry. Retrying burns more of the same quota; the UI
@@ -790,8 +795,8 @@ export async function runAgentTurn(
   const history: Content[] = [...contents];
   const setStatus = callbacks.onStatus ?? (() => {});
   const signal = callbacks.signal;
-  const systemInstruction = await buildSystemInstruction(memo);
-  // Merge connected MCP servers' tools into this turn's tool set.
+  // Merge connected MCP servers' tools into this turn's tool set (before building
+  // the prompt, so it can name the live integrations).
   try {
     await McpClient.ensureConnections();
     const mcp = McpClient.getMcpToolDeclarations();
@@ -801,6 +806,7 @@ export async function runAgentTurn(
   } catch {
     activeTools = TOOLS;
   }
+  const systemInstruction = await buildSystemInstruction(memo);
   const secrets = await collectSecretValues();
   const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
