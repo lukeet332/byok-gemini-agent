@@ -20,13 +20,18 @@ import {
 
 import {
   getGeminiKey,
+  getGithubToken,
   getModel,
   getSystemPrompt,
+  getWriteMode,
   loadSecrets,
   normalizeSecretName,
   saveAll,
+  saveGithubToken,
   saveModel,
   saveSystemPrompt,
+  saveWriteMode,
+  GitWriteMode,
   NamedSecret,
 } from "../storage/SecureStorage";
 import { clearErrors, listErrorsByThread, ErrorGroup } from "../storage/ErrorLogStore";
@@ -50,6 +55,8 @@ export default function SettingsScreen() {
   const [geminiKey, setGeminiKey] = useState("");
   const [model, setModel] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
+  const [githubToken, setGithubToken] = useState("");
+  const [writeMode, setWriteMode] = useState<GitWriteMode>("pr");
   const [secrets, setSecrets] = useState<NamedSecret[]>([]);
   const [newName, setNewName] = useState("");
   const [newValue, setNewValue] = useState("");
@@ -65,6 +72,8 @@ export default function SettingsScreen() {
     (async () => {
       setGeminiKey(await getGeminiKey());
       setModel(await getModel());
+      setGithubToken(await getGithubToken());
+      setWriteMode(await getWriteMode());
       setSystemPrompt(await getSystemPrompt());
       setSecrets(await loadSecrets());
       setErrorGroups(await listErrorsByThread());
@@ -105,6 +114,8 @@ export default function SettingsScreen() {
     try {
       await saveAll(geminiKey, secrets);
       await saveModel(model);
+      await saveGithubToken(githubToken);
+      await saveWriteMode(writeMode);
       await saveSystemPrompt(systemPrompt);
       setStatus("Saved securely on this device.");
     } catch (err) {
@@ -176,6 +187,40 @@ export default function SettingsScreen() {
           autoCapitalize="none"
           autoCorrect={false}
         />
+
+        <Text style={styles.sectionLabel}>GitHub (coding)</Text>
+        <Text style={styles.hint}>
+          A Personal Access Token lets the assistant read repos and commit changes. Fine-grained, scoped to
+          your repos, is safest.
+        </Text>
+        <TextInput
+          style={styles.input}
+          value={githubToken}
+          onChangeText={setGithubToken}
+          placeholder="not set"
+          placeholderTextColor={theme.textDim}
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+        />
+        <Link label="Create a GitHub token →" url="https://github.com/settings/tokens" />
+
+        <Text style={styles.smallLabel}>How code changes are committed</Text>
+        <View style={styles.chips}>
+          {([
+            ["pr", "Branch + PR"],
+            ["branch", "Branch only"],
+            ["main", "Direct to main"],
+          ] as [GitWriteMode, string][]).map(([m, label]) => (
+            <TouchableOpacity
+              key={m}
+              style={[styles.chip, writeMode === m && styles.chipActive]}
+              onPress={() => setWriteMode(m)}
+            >
+              <Text style={[styles.chipText, writeMode === m && styles.chipTextActive]}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
 
         <Text style={styles.sectionLabel}>Your API secrets</Text>
         <Text style={styles.hint}>
@@ -318,6 +363,7 @@ const styles = StyleSheet.create({
   title: { color: theme.text, fontSize: 28, fontWeight: "700" },
   subtitle: { color: theme.textDim, fontSize: 13, marginTop: 6, marginBottom: 18, lineHeight: 18 },
   sectionLabel: { color: theme.text, fontSize: 16, fontWeight: "700", marginTop: 14 },
+  smallLabel: { color: theme.textDim, fontSize: 13, fontWeight: "600", marginTop: 12, marginBottom: 6 },
   hint: { color: theme.textDim, fontSize: 12, marginTop: 2, marginBottom: 8, lineHeight: 17 },
   input: {
     color: theme.text,

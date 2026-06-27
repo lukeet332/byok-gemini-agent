@@ -13,6 +13,7 @@ import {
   Image,
   KeyboardAvoidingView,
   ListRenderItemInfo,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -146,7 +147,16 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   const [listening, setListening] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<{ uri: string; data: string; mimeType: string } | null>(null);
+  const [autoMode, setAutoModeState] = useState(false);
+  const [autoMenu, setAutoMenu] = useState(false);
+  const autoModeRef = useRef(false);
   const voiceIdRef = useRef<string | undefined>(undefined);
+
+  function setAuto(v: boolean) {
+    autoModeRef.current = v;
+    setAutoModeState(v);
+    setAutoMenu(false);
+  }
   // Streaming: targetRef holds the full text so far; `displayed` is the smoothly
   // revealed substring (animated char-by-char by a ticker).
   const [displayed, setDisplayed] = useState("");
@@ -232,12 +242,17 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   }, []);
 
   function confirmWrite({ method, url }: { method: string; url: string }): Promise<boolean> {
+    if (autoModeRef.current) return Promise.resolve(true); // auto mode: no popups
     const body =
       method === "INTENT"
         ? `The assistant wants to hand off to another app:\n\n${url}\n\nAllow it?`
         : method === "FILE"
           ? `The assistant wants to write to a file:\n\n${url}\n\nAllow it?`
-          : `The assistant wants to send a ${method} request to:\n\n${url}\n\nThis can change data. Allow it?`;
+          : method === "OPEN"
+            ? `The assistant wants to open:\n\n${url}\n\nAllow it?`
+            : method === "COMMIT"
+              ? `The assistant wants to commit to GitHub:\n\n${url}\n\nAllow it?`
+              : `The assistant wants to send a ${method} request to:\n\n${url}\n\nThis can change data. Allow it?`;
     return new Promise((resolve) => {
       Alert.alert("Confirm action", body, [
         { text: "Decline", style: "cancel", onPress: () => resolve(false) },
@@ -580,13 +595,8 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
             {status}
             {queuedCount > 0 ? `  ·  ${queuedCount} queued` : ""}
           </Text>
-          <TouchableOpacity onPress={() => abortRef.current?.abort()} hitSlop={8}>
-            <Ionicons name="stop-circle" size={24} color={theme.danger} />
-          </TouchableOpacity>
         </View>
       ) : null}
-
-      {busy ? <Text style={styles.keepOpen}>Keep Fraude open — leaving cancels this task. Send more to queue them.</Text> : null}
 
       {pendingImage ? (
         <View style={styles.attachPreview}>
@@ -598,36 +608,72 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
         </View>
       ) : null}
 
-      <View style={styles.inputBar}>
-        <TouchableOpacity style={[styles.iconBtn, styles.iconBtnGhost]} onPress={pickImage}>
-          <Ionicons name="image-outline" size={22} color={theme.accent} />
-        </TouchableOpacity>
-        <TextInput
-          style={styles.input}
-          value={input}
-          onChangeText={(t) => {
-            setInput(t);
-            voiceInputRef.current = false; // typed → don't auto-speak the reply
-          }}
-          placeholder={listening ? "Listening…" : busy ? "Queue another message…" : "Message"}
-          placeholderTextColor={theme.textDim}
-          multiline
-        />
-        <TouchableOpacity
-          style={[styles.iconBtn, listening ? styles.micActive : styles.iconBtnGhost]}
-          onPress={toggleMic}
-          disabled={busy}
-        >
-          <Ionicons name={listening ? "stop" : "mic"} size={22} color={listening ? "#fff" : theme.accent} />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.iconBtn, styles.sendBtn, !input.trim() && !pendingImage && styles.sendBtnDisabled]}
-          onPress={() => handleSendMessage(input)}
-          disabled={!input.trim() && !pendingImage}
-        >
-          <Ionicons name="arrow-up" size={22} color={theme.bg} />
-        </TouchableOpacity>
+      {/* Unified composer: text + mic row, divider, actions row. */}
+      <View style={styles.composer}>
+        <View style={styles.composerTop}>
+          <TextInput
+            style={styles.composerInput}
+            value={input}
+            onChangeText={(t) => {
+              setInput(t);
+              voiceInputRef.current = false;
+            }}
+            placeholder={listening ? "Listening…" : busy ? "Queue another message…" : "Message"}
+            placeholderTextColor={theme.textDim}
+            multiline
+          />
+          <TouchableOpacity onPress={toggleMic} disabled={busy} hitSlop={8}>
+            <Ionicons name={listening ? "stop-circle" : "mic"} size={22} color={listening ? theme.danger : theme.textDim} />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.composerDivider} />
+        <View style={styles.composerBottom}>
+          <TouchableOpacity onPress={pickImage} hitSlop={8}>
+            <Ionicons name="add" size={26} color={theme.textDim} />
+          </TouchableOpacity>
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity style={[styles.autoPill, autoMode && styles.autoPillOn]} onPress={() => setAutoMenu(true)}>
+            <Ionicons name="flash" size={14} color={autoMode ? theme.bg : theme.accent} />
+            <Text style={[styles.autoPillText, autoMode && styles.autoPillTextOn]}>{autoMode ? "Auto" : "Ask"}</Text>
+          </TouchableOpacity>
+          {busy ? (
+            <TouchableOpacity style={styles.composerStop} onPress={() => abortRef.current?.abort()}>
+              <Ionicons name="square" size={16} color="#fff" />
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            style={[styles.composerSend, !input.trim() && !pendingImage && styles.sendBtnDisabled]}
+            onPress={() => handleSendMessage(input)}
+            disabled={!input.trim() && !pendingImage}
+          >
+            <Ionicons name="arrow-up" size={20} color={theme.bg} />
+          </TouchableOpacity>
+        </View>
       </View>
+
+      <Modal visible={autoMenu} transparent animationType="fade" onRequestClose={() => setAutoMenu(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAutoMenu(false)}>
+          <View style={styles.modeCard}>
+            <Text style={styles.modeCardTitle}>Permission mode</Text>
+            <TouchableOpacity style={[styles.modeRow, !autoMode && styles.modeRowActive]} onPress={() => setAuto(false)}>
+              <Ionicons name="hand-left-outline" size={22} color={theme.text} />
+              <View style={styles.modeTextWrap}>
+                <Text style={styles.modeName}>Ask before actions</Text>
+                <Text style={styles.modeDesc}>Fraude asks before each write — API calls, app handoffs, file writes, GitHub commits.</Text>
+              </View>
+              {!autoMode ? <Ionicons name="checkmark" size={20} color={theme.accent} /> : null}
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.modeRow, autoMode && styles.modeRowActive]} onPress={() => setAuto(true)}>
+              <Ionicons name="flash" size={22} color={theme.accent} />
+              <View style={styles.modeTextWrap}>
+                <Text style={styles.modeName}>Auto mode</Text>
+                <Text style={styles.modeDesc}>Fraude performs every action without asking. Only use when you trust the task.</Text>
+              </View>
+              {autoMode ? <Ionicons name="checkmark" size={20} color={theme.accent} /> : null}
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -696,6 +742,43 @@ const styles = StyleSheet.create({
   noticeText: { color: theme.accent, fontSize: 13, textAlign: "center", lineHeight: 19 },
   statusRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 6, gap: 8 },
   statusText: { color: theme.textDim, fontSize: 13, fontStyle: "italic", flex: 1 },
+  composer: {
+    margin: 10,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
+  composerTop: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  composerInput: { flex: 1, color: theme.text, fontSize: 15, maxHeight: 140, paddingVertical: Platform.OS === "ios" ? 6 : 2 },
+  composerDivider: { height: 1, backgroundColor: theme.border, marginVertical: 8 },
+  composerBottom: { flexDirection: "row", alignItems: "center", gap: 10 },
+  autoPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.accent,
+  },
+  autoPillOn: { backgroundColor: theme.accent },
+  autoPillText: { color: theme.accent, fontSize: 13, fontWeight: "700" },
+  autoPillTextOn: { color: theme.bg },
+  composerSend: { width: 38, height: 38, borderRadius: 19, backgroundColor: theme.accent, alignItems: "center", justifyContent: "center" },
+  composerStop: { width: 38, height: 38, borderRadius: 19, backgroundColor: theme.danger, alignItems: "center", justifyContent: "center" },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end", padding: 16 },
+  modeCard: { backgroundColor: theme.surface, borderRadius: 16, borderWidth: 1, borderColor: theme.border, padding: 14, marginBottom: 80 },
+  modeCardTitle: { color: theme.textDim, fontSize: 13, fontWeight: "700", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 },
+  modeRow: { flexDirection: "row", alignItems: "center", gap: 12, padding: 12, borderRadius: 12 },
+  modeRowActive: { backgroundColor: theme.surfaceAlt },
+  modeTextWrap: { flex: 1 },
+  modeName: { color: theme.text, fontSize: 16, fontWeight: "700" },
+  modeDesc: { color: theme.textDim, fontSize: 13, marginTop: 2, lineHeight: 18 },
   inputBar: {
     flexDirection: "row",
     alignItems: "flex-end",

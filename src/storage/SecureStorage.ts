@@ -17,6 +17,11 @@ const JINA_KEY = "JINA_API_KEY";
 const SYSTEM_PROMPT_KEY = "SYSTEM_PROMPT";
 // Selected Gemini model id ("" means: use the built-in default).
 const MODEL_KEY = "GEMINI_MODEL";
+// GitHub PAT for the coding backend (a first-class function key).
+const GITHUB_KEY = "GITHUB_TOKEN";
+// How the AI's code changes land: "pr" (branch+PR), "branch", or "main".
+const WRITE_MODE_KEY = "GIT_WRITE_MODE";
+export type GitWriteMode = "pr" | "branch" | "main";
 // Index of the user's custom secret names (JSON array of strings).
 const SECRET_INDEX = "SECRET_NAMES";
 // Each custom secret value is stored under this prefix + its name.
@@ -88,6 +93,29 @@ export async function saveModel(value: string): Promise<void> {
   const v = value.trim();
   if (v) await SecureStore.setItemAsync(MODEL_KEY, v);
   else await SecureStore.deleteItemAsync(MODEL_KEY);
+}
+
+// ---- GitHub PAT (coding backend) ----
+
+export async function getGithubToken(): Promise<string> {
+  return (await SecureStore.getItemAsync(GITHUB_KEY)) ?? "";
+}
+
+export async function saveGithubToken(value: string): Promise<void> {
+  const v = value.trim();
+  if (v) await SecureStore.setItemAsync(GITHUB_KEY, v);
+  else await SecureStore.deleteItemAsync(GITHUB_KEY);
+}
+
+// ---- Git write mode (default: branch + PR) ----
+
+export async function getWriteMode(): Promise<GitWriteMode> {
+  const v = (await SecureStore.getItemAsync(WRITE_MODE_KEY)) as GitWriteMode | null;
+  return v === "branch" || v === "main" ? v : "pr";
+}
+
+export async function saveWriteMode(mode: GitWriteMode): Promise<void> {
+  await SecureStore.setItemAsync(WRITE_MODE_KEY, mode);
 }
 
 // ---- Custom named secrets ----

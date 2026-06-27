@@ -10,11 +10,12 @@
 import { fetch as expoFetch } from "expo/fetch";
 
 import { Content, FunctionCall, Part, Tool } from "../types";
-import { getGeminiKey, getModel, getSecretValue, getSystemPrompt, listSecretNames } from "../storage/SecureStorage";
+import { getGeminiKey, getGithubToken, getModel, getSecretValue, getSystemPrompt, listSecretNames } from "../storage/SecureStorage";
 import { appendError } from "../storage/ErrorLogStore";
 import { BrowserEngine } from "../browser/BrowserEngine";
 import * as Device from "../device/DeviceTools";
 import * as Files from "../device/FileTools";
+import * as Github from "../device/GithubTools";
 
 // Default model + the presets offered in Settings. Users can also type any
 // model id (e.g. a newer one) as a custom value.
@@ -89,6 +90,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "- http_request(method,url,headers,body): call ANY API. Authenticate by putting {{SECRET_NAME}} in the url/headers/body — values are substituted on-device; you never see them.",
   "- Device / other apps: check_app_available(url-or-scheme), open_link(url or deep link), share_content(text), clipboard_get(), clipboard_set(text), send_android_intent(...).",
   "- Files: grant_folder (one-time per folder), list_files(folderUri?), read_file(uri), write_file(uri,content), create_file(folderUri,name,content), pick_file. To find/edit a file in e.g. Downloads: list_files() to see granted folders; if none, call grant_folder and ask the user to pick Downloads; then list_files(uri), read_file, and write_file/create_file as needed.",
+  "- GitHub coding: github_list_path / github_get_file / github_search_code to read & answer questions about a repo (free), and github_commit to make changes. ALWAYS read the relevant files first, then github_commit with the FULL new content of each changed file (blobs replace the whole file) and a clear commit message. Commits honour the user's write mode (branch+PR by default) and need their confirmation.",
   "",
   "Acting on the phone: to use another app (e.g. send a WhatsApp message), FIRST check_app_available (e.g. 'whatsapp://'), then format that app's deep link yourself (e.g. https://wa.me/<number>?text=...) and open_link it, or use send_android_intent for advanced handoffs. Use clipboard_set to hand the user text to paste anywhere.",
   "",
@@ -286,6 +288,74 @@ export const TOOLS: Tool[] = [
           required: ["folderUri", "name", "content"],
         },
       },
+      {
+        name: "github_list_path",
+        description:
+          "List a directory in a GitHub repo (or report a path is a file) to navigate a codebase. repo is 'owner/name'.",
+        parameters: {
+          type: "object",
+          properties: {
+            repo: { type: "string", description: "owner/name" },
+            path: { type: "string", description: "Directory path (default: repo root)." },
+            ref: { type: "string", description: "Optional branch/tag/sha." },
+          },
+          required: ["repo"],
+        },
+      },
+      {
+        name: "github_get_file",
+        description: "Read a file's text content from a GitHub repo.",
+        parameters: {
+          type: "object",
+          properties: {
+            repo: { type: "string", description: "owner/name" },
+            path: { type: "string", description: "File path in the repo." },
+            ref: { type: "string", description: "Optional branch/tag/sha." },
+          },
+          required: ["repo", "path"],
+        },
+      },
+      {
+        name: "github_search_code",
+        description: "Search code on GitHub. Optionally scope to one repo (owner/name).",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Search query." },
+            repo: { type: "string", description: "Optional owner/name to scope the search." },
+          },
+          required: ["query"],
+        },
+      },
+      {
+        name: "github_commit",
+        description:
+          "Commit code changes to a GitHub repo (one commit, multiple files). Provide the FULL new content " +
+          "of each changed/created file — blobs replace the whole file. Honours the user's write mode " +
+          "(branch+PR / branch / main) and requires their confirmation. Read the files first so you don't " +
+          "lose existing content.",
+        parameters: {
+          type: "object",
+          properties: {
+            repo: { type: "string", description: "owner/name" },
+            message: { type: "string", description: "Commit message (first line = title)." },
+            files: {
+              type: "array",
+              description: "Files to write, each with full new content.",
+              items: {
+                type: "object",
+                properties: {
+                  path: { type: "string", description: "Path in the repo." },
+                  content: { type: "string", description: "Full new file content." },
+                },
+                required: ["path", "content"],
+              },
+            },
+            branch: { type: "string", description: "Optional branch name (used in branch mode)." },
+          },
+          required: ["repo", "message", "files"],
+        },
+      },
     ],
   },
 ];
@@ -339,13 +409,29 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
       String(args.content ?? ""),
       typeof args.mimeType === "string" ? args.mimeType : undefined
     ),
+  github_list_path: (args) =>
+    Github.listPath(String(args.repo ?? ""), typeof args.path === "string" ? args.path : "", typeof args.ref === "string" ? args.ref : undefined),
+  github_get_file: (args) =>
+    Github.getFile(String(args.repo ?? ""), String(args.path ?? ""), typeof args.ref === "string" ? args.ref : undefined),
+  github_search_code: (args) =>
+    Github.searchCode(String(args.query ?? ""), typeof args.repo === "string" ? args.repo : undefined),
+  github_commit: (args) =>
+    Github.commitChangeset(
+      String(args.repo ?? ""),
+      String(args.message ?? ""),
+      Array.isArray(args.files)
+        ? (args.files as any[]).map((f) => ({ path: String(f?.path ?? ""), content: String(f?.content ?? "") }))
+        : [],
+      { branch: typeof args.branch === "string" ? args.branch : undefined }
+    ),
 };
 
 // Stored secret values, used to scrub anything echoed back into the model/logs.
 async function collectSecretValues(): Promise<string[]> {
   const names = await listSecretNames();
   const vals = await Promise.all(names.map(getSecretValue));
-  return vals.filter((v): v is string => !!v && v.length >= 4);
+  const gh = await getGithubToken();
+  return [...vals, gh].filter((v): v is string => !!v && v.length >= 4);
 }
 
 function redactString(text: string, secrets: string[]): string {
@@ -682,6 +768,9 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "read_file") return "Reading file...";
   if (call.name === "pick_file") return "Waiting for file pick...";
   if (call.name === "write_file" || call.name === "create_file") return "Writing file...";
+  if (call.name === "github_list_path" || call.name === "github_get_file") return `Reading repo: ${String(call.args?.repo ?? "")}`;
+  if (call.name === "github_search_code") return "Searching code...";
+  if (call.name === "github_commit") return `Committing to ${String(call.args?.repo ?? "")}...`;
   return `Running tool: ${call.name}...`;
 }
 
@@ -731,20 +820,31 @@ export async function runAgentTurn(
       if (!executor) {
         result = { ok: false, error: `Unknown tool: ${call.name}` };
       } else {
-        // Confirm state-changing API calls + app handoffs before executing them.
+        // Confirm EVERY state-changing / outward action before executing it.
         const method = String(call.args?.method ?? "GET").toUpperCase();
-        const isHttpWrite = call.name === "http_request" && WRITE_METHODS.has(method);
-        const isIntent = call.name === "send_android_intent";
-        const isFileWrite = call.name === "write_file" || call.name === "create_file";
-        const needsConfirm = isHttpWrite || isIntent || isFileWrite;
-        const confirmMethod = isIntent ? "INTENT" : isFileWrite ? "FILE" : method;
-        const confirmUrl = isIntent
-          ? `${String(call.args?.action ?? "")} ${String(call.args?.package ?? "")}`.trim()
-          : isFileWrite
-            ? String(call.args?.uri ?? call.args?.name ?? "a file")
-            : typeof call.args?.url === "string"
-              ? (call.args.url as string)
-              : "";
+        const a = call.args ?? {};
+        let needsConfirm = false;
+        let confirmMethod = method;
+        let confirmUrl = typeof a.url === "string" ? (a.url as string) : "";
+        if (call.name === "http_request" && WRITE_METHODS.has(method)) {
+          needsConfirm = true;
+        } else if (call.name === "open_link") {
+          needsConfirm = true;
+          confirmMethod = "OPEN";
+        } else if (call.name === "send_android_intent") {
+          needsConfirm = true;
+          confirmMethod = "INTENT";
+          confirmUrl = `${String(a.action ?? "")} ${String(a.package ?? "")}`.trim();
+        } else if (call.name === "write_file" || call.name === "create_file") {
+          needsConfirm = true;
+          confirmMethod = "FILE";
+          confirmUrl = String(a.uri ?? a.name ?? "a file");
+        } else if (call.name === "github_commit") {
+          needsConfirm = true;
+          confirmMethod = "COMMIT";
+          const n = Array.isArray(a.files) ? (a.files as unknown[]).length : 0;
+          confirmUrl = `${String(a.repo ?? "")} · ${n} file(s)`;
+        }
         if (needsConfirm && callbacks.confirmWrite && !(await callbacks.confirmWrite({ method: confirmMethod, url: confirmUrl }))) {
           result = { ok: false, error: "The user declined this request. Do not retry it; ask them what to do instead." };
         } else {

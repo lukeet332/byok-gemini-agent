@@ -38,14 +38,20 @@ export interface Content {
 
 // ---- Tool schema (Gemini function declarations) ----
 
+// A (recursive) JSON-schema-ish node for tool parameters — supports objects,
+// arrays (items), and nested properties.
+export interface ParamSchema {
+  type: string;
+  description?: string;
+  items?: ParamSchema;
+  properties?: Record<string, ParamSchema>;
+  required?: string[];
+}
+
 export interface FunctionDeclaration {
   name: string;
   description: string;
-  parameters: {
-    type: "object";
-    properties: Record<string, { type: string; description?: string }>;
-    required?: string[];
-  };
+  parameters: ParamSchema;
 }
 
 export interface Tool {
