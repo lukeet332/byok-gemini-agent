@@ -3,6 +3,8 @@ package expo.modules.shellexec
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
+import android.text.TextUtils
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -82,6 +84,32 @@ class ShellExecModule : Module() {
       }
     }
 
+    // ---- Accessibility-based UI automation (no root / Shizuku needed) ----
+
+    // Is our accessibility service enabled in system settings?
+    Function("a11yEnabled") {
+      val ctx = appContext.reactContext ?: return@Function false
+      isA11yEnabled(ctx)
+    }
+
+    // Open the system Accessibility settings so the user can enable Fraude.
+    Function("openA11ySettings") {
+      val ctx = appContext.reactContext ?: return@Function false
+      val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+      ctx.startActivity(intent)
+      true
+    }
+
+    // Read the current screen (node tree) so the AI can decide what to act on.
+    AsyncFunction("a11yDump") {
+      FraudeAccessibilityService.instance?.dump() ?: "Accessibility service not enabled. Turn it on in Settings → Advanced mode."
+    }
+
+    AsyncFunction("a11yTapText") { text: String -> FraudeAccessibilityService.instance?.tapText(text) ?: false }
+    AsyncFunction("a11yTapId") { id: String -> FraudeAccessibilityService.instance?.tapId(id) ?: false }
+    AsyncFunction("a11ySetText") { text: String -> FraudeAccessibilityService.instance?.setText(text) ?: false }
+    AsyncFunction("a11yGlobal") { action: String -> FraudeAccessibilityService.instance?.global(action) ?: false }
+
     // Run a command through Shizuku (shell-uid).
     AsyncFunction("execShizuku") { command: String, timeoutMs: Int ->
       try {
@@ -107,6 +135,16 @@ class ShellExecModule : Module() {
     )
     m.isAccessible = true
     return m.invoke(null, cmd, null, null) as Process
+  }
+
+  private fun isA11yEnabled(ctx: android.content.Context): Boolean {
+    if (FraudeAccessibilityService.instance != null) return true
+    val flat = Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
+    val target = "${ctx.packageName}/${FraudeAccessibilityService::class.java.name}"
+    val splitter = TextUtils.SimpleStringSplitter(':')
+    splitter.setString(flat)
+    for (name in splitter) if (name.equals(target, ignoreCase = true)) return true
+    return false
   }
 
   private fun errorResult(message: String): Map<String, Any> =

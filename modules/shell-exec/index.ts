@@ -23,6 +23,13 @@ interface NativeShell {
   shizukuStatus: () => Promise<ShizukuStatus>;
   requestShizukuPermission: () => Promise<boolean>;
   runTermux: (commandLine: string) => Promise<{ ok: boolean; error?: string }>;
+  a11yEnabled: () => boolean;
+  openA11ySettings: () => boolean;
+  a11yDump: () => Promise<string>;
+  a11yTapText: (text: string) => Promise<boolean>;
+  a11yTapId: (id: string) => Promise<boolean>;
+  a11ySetText: (text: string) => Promise<boolean>;
+  a11yGlobal: (action: string) => Promise<boolean>;
 }
 
 let native: NativeShell | null = null;
@@ -81,4 +88,42 @@ export async function runTermux(commandLine: string): Promise<{ ok: boolean; err
   } catch (e) {
     return { ok: false, error: String(e) };
   }
+}
+
+// ---- Accessibility UI automation ----
+
+export function a11yEnabled(): boolean {
+  try {
+    return native ? native.a11yEnabled() : false;
+  } catch {
+    return false;
+  }
+}
+
+export function openA11ySettings(): void {
+  try {
+    native?.openA11ySettings();
+  } catch {
+    // ignore
+  }
+}
+
+export async function a11yDump(): Promise<string> {
+  return native ? native.a11yDump() : "Only available on Android.";
+}
+
+export async function a11yTapText(text: string): Promise<boolean> {
+  return native ? native.a11yTapText(text) : false;
+}
+
+export async function a11yTapId(id: string): Promise<boolean> {
+  return native ? native.a11yTapId(id) : false;
+}
+
+export async function a11ySetText(text: string): Promise<boolean> {
+  return native ? native.a11ySetText(text) : false;
+}
+
+export async function a11yGlobal(action: string): Promise<boolean> {
+  return native ? native.a11yGlobal(action) : false;
 }

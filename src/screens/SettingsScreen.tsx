@@ -51,7 +51,13 @@ import {
 } from "../storage/SecureStorage";
 import { clearErrors, listErrorsByThread, ErrorGroup } from "../storage/ErrorLogStore";
 import { requestNotificationPermission } from "../agent/Background";
-import { requestShizukuPermission, shizukuStatus, ShizukuStatus } from "../../modules/shell-exec";
+import {
+  a11yEnabled,
+  openA11ySettings,
+  requestShizukuPermission,
+  shizukuStatus,
+  ShizukuStatus,
+} from "../../modules/shell-exec";
 import { getUserNotes, saveUserNotes } from "../storage/UserNotes";
 import {
   ANTHROPIC_DEFAULT_MODEL,
@@ -96,6 +102,7 @@ export default function SettingsScreen() {
   const [notesOpen, setNotesOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [shizuku, setShizuku] = useState<ShizukuStatus>({ running: false, granted: false });
+  const [a11yOn, setA11yOn] = useState(false);
   const [userNotes, setUserNotes] = useState("");
   // Live model list from Google (null = loading/failed -> use presets).
   const [modelMenu, setModelMenu] = useState(false);
@@ -129,6 +136,7 @@ export default function SettingsScreen() {
       setShellEnabledState(await getShellEnabled());
       setConfirmSystemState(await getConfirmSystemActions());
       setShizuku(await shizukuStatus());
+      setA11yOn(a11yEnabled());
       setGithubToken(await getGithubToken());
       setWriteMode(await getWriteMode());
       setSystemPrompt(await getSystemPrompt());
@@ -449,6 +457,21 @@ export default function SettingsScreen() {
             trackColor={{ false: theme.border, true: theme.accent }}
             thumbColor={theme.text}
           />
+        </View>
+
+        <Text style={styles.sectionLabel}>Screen automation</Text>
+        <Text style={styles.hint}>
+          Let Fraude operate your phone — read the screen and tap/type to drive any app (e.g. open WhatsApp
+          with a drafted message and press send). App-agnostic; no root needed. Status:{" "}
+          {a11yOn ? "enabled ✓" : "off"}.
+        </Text>
+        <View style={styles.advButtons}>
+          <TouchableOpacity style={styles.advBtn} onPress={() => openA11ySettings()}>
+            <Text style={styles.advBtnText}>{a11yOn ? "Accessibility settings" : "Enable screen automation"}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.advBtn} onPress={() => setA11yOn(a11yEnabled())}>
+            <Text style={styles.advBtnText}>Refresh</Text>
+          </TouchableOpacity>
         </View>
 
         <Text style={styles.sectionLabel}>GitHub (coding)</Text>

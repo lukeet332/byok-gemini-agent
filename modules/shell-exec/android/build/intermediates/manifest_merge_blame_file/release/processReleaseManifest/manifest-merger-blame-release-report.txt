@@ -5,7 +5,7 @@
 5    <uses-sdk android:minSdkVersion="24" />
 6
 7    <application>
-7-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:2:3-11:17
+7-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:2:3-24:17
 8
 9        <!-- Required for the Shizuku binder to reach this app. -->
 10        <provider
@@ -22,6 +22,30 @@
 15-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:7:7-35
 16            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 16-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:10:7-73
-17    </application>
-18
-19</manifest>
+17
+18        <!-- App-agnostic UI automation; the user enables it in Accessibility settings. -->
+19        <service
+19-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:13:5-23:15
+20            android:name="expo.modules.shellexec.FraudeAccessibilityService"
+20-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:14:7-71
+21            android:exported="false"
+21-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:16:7-31
+22            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" >
+22-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:15:7-73
+23            <intent-filter>
+23-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:17:7-19:23
+24                <action android:name="android.accessibilityservice.AccessibilityService" />
+24-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:18:9-84
+24-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:18:17-81
+25            </intent-filter>
+26
+27            <meta-data
+27-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:20:7-22:63
+28                android:name="android.accessibilityservice"
+28-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:21:9-52
+29                android:resource="@xml/fraude_accessibility_config" />
+29-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:22:9-60
+30        </service>
+31    </application>
+32
+33</manifest>

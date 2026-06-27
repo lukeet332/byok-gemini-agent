@@ -1,13 +1,13 @@
 -- Merging decision tree log ---
 manifest
-ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-12:12
-INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-12:12
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-25:12
+INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-25:12
 	package
 		INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml
 	xmlns:android
 		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:11-69
 application
-ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:2:3-11:17
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:2:3-24:17
 provider#rikka.shizuku.ShizukuProvider
 ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:4:5-10:76
 	android:enabled
@@ -22,6 +22,26 @@ ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/sr
 		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:10:7-73
 	android:name
 		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:5:7-51
+service#expo.modules.shellexec.FraudeAccessibilityService
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:13:5-23:15
+	android:exported
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:16:7-31
+	android:permission
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:15:7-73
+	android:name
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:14:7-71
+intent-filter#action:name:android.accessibilityservice.AccessibilityService
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:17:7-19:23
+action#android.accessibilityservice.AccessibilityService
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:18:9-84
+	android:name
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:18:17-81
+meta-data#android.accessibilityservice
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:20:7-22:63
+	android:resource
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:22:9-60
+	android:name
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:21:9-52
 uses-sdk
 INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml reason: use-sdk injection requested
 INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml

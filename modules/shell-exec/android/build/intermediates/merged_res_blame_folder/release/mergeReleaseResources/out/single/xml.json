@@ -1,5 +1,9 @@
 [
     {
+        "merged": "expo.modules.shellexec.shell-exec-release-48:/xml/fraude_accessibility_config.xml",
+        "source": "expo.modules.shellexec.shell-exec-main-49:/xml/fraude_accessibility_config.xml"
+    },
+    {
         "merged": "expo.modules.shellexec.shell-exec-release-48:/xml/rn_dev_preferences.xml",
         "source": "expo.modules.shellexec.shell-exec-react-android-0.76.5-release-8:/xml/rn_dev_preferences.xml"
     }

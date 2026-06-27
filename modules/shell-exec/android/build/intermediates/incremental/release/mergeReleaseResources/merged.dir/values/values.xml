@@ -372,6 +372,7 @@
     <string name="default_error_message">"Invalid input"</string>
     <string name="default_popup_window_title" ns2:ignore="ExtraTranslation">"Pop-Up Window"</string>
     <string name="dropdown_menu">"Dropdown menu"</string>
+    <string name="fraude_a11y_desc">Lets Fraude read the current screen and tap or type on your behalf, to automate apps (e.g. open WhatsApp and send a drafted message).</string>
     <string description="heading to a page or section" name="header_description">Heading</string>
     <string description="images, code snippets, text, emojis, or other content that can be combined to deliver information in a visual manner" name="image_description">Image</string>
     <string description="Displays a button with an image (instead of text) that can be pressed or clicked by the user" name="imagebutton_description">Button, Image</string>

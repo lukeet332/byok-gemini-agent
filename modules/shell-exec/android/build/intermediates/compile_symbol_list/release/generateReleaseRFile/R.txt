@@ -1,0 +1,2 @@
+int string fraude_a11y_desc 0x0
+int xml fraude_accessibility_config 0x0

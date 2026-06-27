@@ -463,6 +463,52 @@ const TERMUX_TOOL: FunctionDeclaration = {
   },
 };
 
+// Accessibility-based UI automation tools — offered only when the user has
+// enabled Fraude's accessibility service. App-agnostic: act by on-screen
+// text/id, not coordinates. This is the no-root way to drive other apps.
+const UI_TOOLS: FunctionDeclaration[] = [
+  {
+    name: "ui_screen",
+    description:
+      "Read the CURRENT screen via accessibility — returns the on-screen elements (their text, " +
+      "content-description, resource-id, whether they're clickable/editable, and centre coordinates). " +
+      "Call this to see what's on screen before tapping/typing, and again after each action to confirm the " +
+      "new state. Works on whatever app is in the foreground.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
+    name: "ui_tap",
+    description:
+      "Tap an on-screen element found by its visible text OR its resource-id (from ui_screen). Robust across " +
+      "apps/screen sizes — no coordinates. Provide one of text or id.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "Visible text / label of the element to tap." },
+        id: { type: "string", description: "resource-id of the element to tap (alternative to text)." },
+      },
+    },
+  },
+  {
+    name: "ui_type",
+    description: "Type text into the currently focused input field (tap the field first with ui_tap).",
+    parameters: {
+      type: "object",
+      properties: { text: { type: "string", description: "The text to enter." } },
+      required: ["text"],
+    },
+  },
+  {
+    name: "ui_global",
+    description: "Press a global navigation button: 'back', 'home', 'recents', or 'notifications'.",
+    parameters: {
+      type: "object",
+      properties: { action: { type: "string", description: "back | home | recents | notifications" } },
+      required: ["action"],
+    },
+  },
+];
+
 // The tools actually sent to Gemini for the current turn = built-in TOOLS plus
 // any connected MCP servers' tools (recomputed at the start of each turn).
 let activeTools: Tool[] = TOOLS;
@@ -578,6 +624,28 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
       timedOut: true,
       note: "Started in Termux but couldn't read output within the time limit (either still running, or reading Termux's files needs Shizuku/root).",
     };
+  },
+  ui_screen: async () => {
+    if (!Shell.a11yEnabled()) return { ok: false, error: "Accessibility automation is off. The user can enable it in Settings → Advanced mode." };
+    return { ok: true, screen: await Shell.a11yDump() };
+  },
+  ui_tap: async (args) => {
+    if (!Shell.a11yEnabled()) return { ok: false, error: "Accessibility automation is off." };
+    const text = typeof args.text === "string" ? args.text : "";
+    const id = typeof args.id === "string" ? args.id : "";
+    if (!text && !id) return { ok: false, error: "Provide text or id to tap." };
+    const tapped = text ? await Shell.a11yTapText(text) : await Shell.a11yTapId(id);
+    return tapped ? { ok: true } : { ok: false, error: `Couldn't find/tap ${text || id}. Call ui_screen to see what's there.` };
+  },
+  ui_type: async (args) => {
+    if (!Shell.a11yEnabled()) return { ok: false, error: "Accessibility automation is off." };
+    const ok = await Shell.a11ySetText(String(args.text ?? ""));
+    return ok ? { ok: true } : { ok: false, error: "No focused input field — tap one first with ui_tap." };
+  },
+  ui_global: async (args) => {
+    if (!Shell.a11yEnabled()) return { ok: false, error: "Accessibility automation is off." };
+    const ok = await Shell.a11yGlobal(String(args.action ?? ""));
+    return ok ? { ok: true } : { ok: false, error: "action must be back, home, recents, or notifications." };
   },
   update_setting: async (args) => {
     const key = String(args.key ?? "").trim().toLowerCase();
@@ -780,6 +848,11 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
     shellLine = "\n\n" + avail;
   }
 
+  const a11yLine = Shell.a11yEnabled()
+    ? "\n\nSCREEN AUTOMATION is ENABLED (accessibility): ui_screen (read the current screen's elements), ui_tap({text|id}), ui_type({text}), ui_global({back|home|recents|notifications}) — drive ANY app by element text/id, not coordinates." +
+      " CHOOSING HOW TO ACT (pick the simplest that fully works, in this order): (1) a real API via http_request — most reliable and fully background; use it if the service has one and a key is stored. (2) A deep link / intent (open_link / send_android_intent) that completes the task in one shot — e.g. 'sms:'/'mailto:' with a body, 'tel:', a maps/spotify link. (3) Screen automation when there's no API/deep link, or to finish what a deep link only set up. MANY app actions are 'deep link to pre-fill + accessibility to finish': e.g. WhatsApp — open_link 'https://wa.me/<number>?text=<urlencoded>' (this opens the chat with the message typed), then ui_screen, ui_tap the 'Send' control by its text/description, then ui_global('home') to return to Fraude. Always ui_screen before tapping and again after, and verify the expected element exists before acting. tap/type ask the user to confirm unless Auto mode is on."
+    : "";
+
   const mcp = McpClient.connectedSummary();
   const mcpLine = mcp
     ? `\n\nConnected MCP integrations — their tools are available to you (named mcp__<server>__<tool>); USE them whenever the request relates to that service: ${mcp}.`
@@ -790,7 +863,7 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
     ? `\n\nWhat you know about this user (their notes/preferences — honour them; update via update_user_notes when you learn something durable):\n${notes}`
     : `\n\nYou have no saved notes about this user yet. When you learn a durable preference, save it with update_user_notes.`;
 
-  return { role: "user", parts: [{ text: base + secretsLine + shellLine + mcpLine + notesBlock + memoBlock }] };
+  return { role: "user", parts: [{ text: base + secretsLine + shellLine + a11yLine + mcpLine + notesBlock + memoBlock }] };
 }
 
 // Single attempt — NO auto-retry. Retrying burns more of the same quota; the UI
@@ -1306,6 +1379,10 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "update_setting") return `Updating setting: ${String(call.args?.key ?? "")}`;
   if (call.name === "run_shell") return `Running command: ${String(call.args?.command ?? "")}`;
   if (call.name === "run_termux") return `Running in Termux: ${String(call.args?.command ?? "")}`;
+  if (call.name === "ui_screen") return "Reading the screen...";
+  if (call.name === "ui_tap") return `Tapping: ${String(call.args?.text ?? call.args?.id ?? "")}`;
+  if (call.name === "ui_type") return "Typing...";
+  if (call.name === "ui_global") return `Pressing: ${String(call.args?.action ?? "")}`;
   if (call.name === "github_list_path" || call.name === "github_get_file") return `Reading repo: ${String(call.args?.repo ?? "")}`;
   if (call.name === "github_search_code") return "Searching code...";
   if (call.name === "github_commit") return `Committing to ${String(call.args?.repo ?? "")}...`;
@@ -1326,9 +1403,9 @@ export async function runAgentTurn(
   // Merge connected MCP servers' tools into this turn's tool set (before building
   // the prompt, so it can name the live integrations).
   const shellOn = await getShellEnabled().catch(() => false);
-  const builtins = shellOn
-    ? [...TOOLS[0].functionDeclarations, SHELL_TOOL, TERMUX_TOOL]
-    : [...TOOLS[0].functionDeclarations];
+  const builtins = [...TOOLS[0].functionDeclarations];
+  if (shellOn) builtins.push(SHELL_TOOL, TERMUX_TOOL);
+  if (Shell.a11yEnabled()) builtins.push(...UI_TOOLS);
   try {
     await McpClient.ensureConnections();
     const mcp = McpClient.getMcpToolDeclarations();
@@ -1397,6 +1474,14 @@ export async function runAgentTurn(
           needsConfirm = true;
           confirmMethod = "SHELL";
           confirmUrl = `[termux] ${String(a.command ?? "")}`;
+        } else if (call.name === "ui_tap") {
+          needsConfirm = true;
+          confirmMethod = "UI";
+          confirmUrl = `tap ${String(a.text ?? a.id ?? "")}`;
+        } else if (call.name === "ui_type") {
+          needsConfirm = true;
+          confirmMethod = "UI";
+          confirmUrl = `type "${String(a.text ?? "")}"`;
         } else if (call.name === "update_setting") {
           needsConfirm = true;
           confirmMethod = "SETTING";

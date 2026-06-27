@@ -17,6 +17,7 @@ import {
 } from "react-native";
 
 import { OPENAI_PRESETS } from "../agent/GeminiAgent";
+import { a11yEnabled, openA11ySettings } from "../../modules/shell-exec";
 import {
   AiProvider,
   saveAnthropicConfig,
@@ -40,6 +41,7 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("");
   const [saving, setSaving] = useState(false);
+  const [autoOn, setAutoOn] = useState(a11yEnabled());
 
   const canContinue =
     !saving &&
@@ -170,6 +172,21 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
           </View>
         )}
 
+        <Text style={styles.label}>Screen automation (optional)</Text>
+        <Text style={styles.hint}>
+          Let Fraude operate your phone — drive any app to, say, open WhatsApp with a drafted message and press
+          send. Turn on Fraude in Accessibility settings. You can skip this and enable it later in Settings.
+        </Text>
+        <View style={styles.autoRow}>
+          <TouchableOpacity style={styles.autoBtn} onPress={() => openA11ySettings()}>
+            <Text style={styles.autoBtnText}>{autoOn ? "Accessibility settings" : "Enable automation"}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.autoBtn} onPress={() => setAutoOn(a11yEnabled())}>
+            <Text style={styles.autoBtnText}>Refresh</Text>
+          </TouchableOpacity>
+          <Text style={styles.autoStatus}>{autoOn ? "enabled ✓" : "off"}</Text>
+        </View>
+
         <Text style={styles.note}>Web search & page reading work out of the box — no extra keys needed.</Text>
 
         <TouchableOpacity
@@ -225,6 +242,17 @@ const styles = StyleSheet.create({
   },
   chipText: { color: theme.text, fontSize: 12, fontWeight: "600" },
   link: { color: theme.accent, fontSize: 13, fontWeight: "600", marginTop: 8 },
+  autoRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 },
+  autoBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.accent,
+    backgroundColor: theme.surface,
+  },
+  autoBtnText: { color: theme.accent, fontWeight: "700", fontSize: 13 },
+  autoStatus: { color: theme.textDim, fontSize: 13 },
   note: { color: theme.textDim, fontSize: 13, marginTop: 22, lineHeight: 19 },
   continueBtn: { backgroundColor: theme.accent, borderRadius: 12, paddingVertical: 16, alignItems: "center", marginTop: 34 },
   disabled: { opacity: 0.4 },
