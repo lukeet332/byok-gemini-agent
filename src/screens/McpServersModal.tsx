@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Linking,
   Modal,
   ScrollView,
   StyleSheet,
@@ -31,6 +32,7 @@ export default function McpServersModal({ visible, onClose }: { visible: boolean
   const [nName, setNName] = useState("");
   const [nUrl, setNUrl] = useState("");
   const [nAuth, setNAuth] = useState<McpAuth>("oauth");
+  const [setupLink, setSetupLink] = useState<string | null>(null);
   const catalogIds = new Set(MCP_CATALOG.map((c) => c.id));
 
   async function addCustom() {
@@ -80,6 +82,15 @@ export default function McpServersModal({ visible, onClose }: { visible: boolean
 
   async function onConnect(server: McpCatalogEntry) {
     setError(null);
+    if (server.selfHost) {
+      // No shared URL — open the Add form pre-filled + show the setup guide.
+      setNName(server.name.replace(/\s*\(self-host\)/i, ""));
+      setNUrl("");
+      setNAuth(server.auth);
+      setSetupLink(server.setupUrl ?? null);
+      setAdding(true);
+      return;
+    }
     if (server.auth === "none") {
       setBusyId(server.id);
       await finishConnect(server, "");
@@ -143,11 +154,15 @@ export default function McpServersModal({ visible, onClose }: { visible: boolean
                         <Text style={styles.badgeOnText}>✓ Connected</Text>
                       </View>
                     ) : (
-                      <View style={[styles.badge, s.auth === "none" ? styles.badgeConnect : styles.badgeAuth]}>
-                        <Text style={s.auth === "none" ? styles.badgeConnectText : styles.badgeAuthText}>
-                          {s.auth === "none" ? "Connect" : "⚠ Needs Auth"}
-                        </Text>
-                      </View>
+                      (() => {
+                        const connectStyle = s.selfHost || s.auth === "none";
+                        const label = s.selfHost ? "Set up" : s.auth === "none" ? "Connect" : "⚠ Needs Auth";
+                        return (
+                          <View style={[styles.badge, connectStyle ? styles.badgeConnect : styles.badgeAuth]}>
+                            <Text style={connectStyle ? styles.badgeConnectText : styles.badgeAuthText}>{label}</Text>
+                          </View>
+                        );
+                      })()
                     )}
                   </TouchableOpacity>
 
@@ -188,6 +203,11 @@ export default function McpServersModal({ visible, onClose }: { visible: boolean
             {adding ? (
               <View style={styles.addBox}>
                 <Text style={styles.tokenHint}>Add a custom MCP server (e.g. your self-hosted Google Workspace server):</Text>
+                {setupLink ? (
+                  <TouchableOpacity onPress={() => Linking.openURL(setupLink)}>
+                    <Text style={styles.setupLink}>📖 Setup guide — host it, then paste your URL →</Text>
+                  </TouchableOpacity>
+                ) : null}
                 <TextInput
                   style={styles.tokenInput}
                   value={nName}
@@ -228,7 +248,13 @@ export default function McpServersModal({ visible, onClose }: { visible: boolean
                 </View>
               </View>
             ) : (
-              <TouchableOpacity style={styles.addServerBtn} onPress={() => setAdding(true)}>
+              <TouchableOpacity
+                style={styles.addServerBtn}
+                onPress={() => {
+                  setSetupLink(null);
+                  setAdding(true);
+                }}
+              >
                 <Text style={styles.addServerText}>＋ Add custom server</Text>
               </TouchableOpacity>
             )}
@@ -299,4 +325,5 @@ const styles = StyleSheet.create({
   addServerBtn: { borderWidth: 1, borderStyle: "dashed", borderColor: theme.border, borderRadius: 12, paddingVertical: 14, alignItems: "center", marginTop: 6 },
   addServerText: { color: theme.accent, fontWeight: "700", fontSize: 14 },
   removeHint: { color: theme.textDim, fontSize: 12, textAlign: "center", marginTop: 12 },
+  setupLink: { color: theme.accent, fontSize: 13, fontWeight: "600", marginBottom: 8 },
 });
