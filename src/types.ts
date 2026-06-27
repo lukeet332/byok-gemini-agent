@@ -15,11 +15,18 @@ export interface FunctionResponse {
   response: Record<string, unknown>;
 }
 
+// Inline binary data (e.g. an image) sent to the model, base64-encoded.
+export interface InlineData {
+  mimeType: string;
+  data: string; // base64
+}
+
 // A Content "part". Gemini parts are a union: exactly one of these fields is set.
 export interface Part {
   text?: string;
   functionCall?: FunctionCall;
   functionResponse?: FunctionResponse;
+  inlineData?: InlineData;
 }
 
 // One turn in the conversation. This is the exact wire shape Gemini expects in
@@ -55,6 +62,8 @@ export interface ChatMessage {
   action?: "open_settings";
   // Marks a server-error notice that offers a manual retry control.
   canRetry?: boolean;
+  // Optional attached image to show in the bubble (local uri or data: uri).
+  imageUri?: string;
 }
 
 // ---- Threads (locally persisted conversations) ----

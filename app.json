@@ -51,7 +51,13 @@
           ]
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Fraude to attach photos to your messages."
+        }
+      ]
     ]
   }
 }

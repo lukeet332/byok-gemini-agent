@@ -24,6 +24,7 @@ import {
 import Markdown from "react-native-markdown-display";
 import { Ionicons } from "@expo/vector-icons";
 import * as Speech from "expo-speech";
+import * as ImagePicker from "expo-image-picker";
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
@@ -38,7 +39,7 @@ import {
   newThread,
   saveThread,
 } from "../storage/ThreadStore";
-import { ChatMessage, Content, Thread } from "../types";
+import { ChatMessage, Content, Part, Thread } from "../types";
 import { theme } from "../theme";
 
 let seq = 0;
@@ -57,6 +58,17 @@ function isInterrupt(text: string): boolean {
 interface Queued {
   prompt: string;
   wasVoice: boolean;
+  image?: { uri: string; data: string; mimeType: string };
+}
+
+// Pick the most natural en-GB voice available (Enhanced = neural, if the device
+// has it installed via Google TTS). Falls back to any English voice.
+function bestVoiceId(voices: Speech.Voice[]): string | undefined {
+  const en = voices.filter((v) => (v.language || "").toLowerCase().startsWith("en"));
+  const gb = en.filter((v) => (v.language || "").toLowerCase().startsWith("en-gb"));
+  const pool = gb.length ? gb : en;
+  const enhanced = pool.find((v) => v.quality === Speech.VoiceQuality.Enhanced);
+  return (enhanced ?? pool[0])?.identifier;
 }
 
 // Derive a thread title locally (no API call) from the first user message.
@@ -81,7 +93,9 @@ function toMessages(contents: Content[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   for (const c of contents) {
     const text = turnText(c);
-    if (text) out.push({ id: nextId(), role: c.role, text });
+    const img = (c.parts ?? []).find((p) => p.inlineData)?.inlineData;
+    const imageUri = img ? `data:${img.mimeType};base64,${img.data}` : undefined;
+    if (text || imageUri) out.push({ id: nextId(), role: c.role, text, imageUri });
   }
   return out;
 }
@@ -131,6 +145,8 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [pendingImage, setPendingImage] = useState<{ uri: string; data: string; mimeType: string } | null>(null);
+  const voiceIdRef = useRef<string | undefined>(undefined);
   // Streaming: targetRef holds the full text so far; `displayed` is the smoothly
   // revealed substring (animated char-by-char by a ticker).
   const [displayed, setDisplayed] = useState("");
@@ -161,6 +177,15 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     setDisplayed("");
   }
   useEffect(() => stopTicker, []);
+
+  // Resolve the most natural TTS voice once (Enhanced en-GB if installed).
+  useEffect(() => {
+    Speech.getAvailableVoicesAsync()
+      .then((vs) => {
+        voiceIdRef.current = bestVoiceId(vs);
+      })
+      .catch(() => {});
+  }, []);
   const abortRef = useRef<AbortController | null>(null);
   const bgAbortRef = useRef(false);
   const busyRef = useRef(false);
@@ -251,6 +276,7 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     setSpeakingId(id);
     Speech.speak(plainText(text), {
       language: "en-GB",
+      voice: voiceIdRef.current, // most natural installed voice, if any
       onDone: () => setSpeakingId(null),
       onStopped: () => setSpeakingId(null),
       onError: () => setSpeakingId(null),
@@ -263,6 +289,22 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
       return;
     }
     startSpeak(msg.id, msg.text);
+  }
+
+  // Attach an image for the model to analyse (multimodal input).
+  async function pickImage() {
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        base64: true,
+        quality: 0.5,
+      });
+      if (res.canceled || !res.assets?.length || !res.assets[0].base64) return;
+      const a = res.assets[0];
+      setPendingImage({ uri: a.uri, data: a.base64 as string, mimeType: a.mimeType ?? "image/jpeg" });
+    } catch {
+      // ignore picker errors
+    }
   }
 
   useEffect(() => {
@@ -289,23 +331,26 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     role: ChatMessage["role"],
     text: string,
     action?: ChatMessage["action"],
-    canRetry?: boolean
+    canRetry?: boolean,
+    imageUri?: string
   ): string {
     const id = nextId();
-    setMessages((prev) => [...prev, { id, role, text, action, canRetry }]);
+    setMessages((prev) => [...prev, { id, role, text, action, canRetry, imageUri }]);
     scrollToEnd();
     return id;
   }
 
   function handleSendMessage(userPrompt: string) {
     const prompt = userPrompt.trim();
-    if (!prompt || !thread) return;
+    const image = pendingImage;
+    if ((!prompt && !image) || !thread) return;
     const wasVoice = voiceInputRef.current;
     voiceInputRef.current = false;
     setInput("");
-    pushMessage("user", prompt); // show it immediately
+    setPendingImage(null);
+    pushMessage("user", prompt, undefined, false, image?.uri); // show it immediately
 
-    queueRef.current.push({ prompt, wasVoice });
+    queueRef.current.push({ prompt, wasVoice, image: image ?? undefined });
     setQueuedCount(queueRef.current.length);
 
     if (runningRef.current) {
@@ -327,8 +372,12 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     if (!next) return;
     const base = liveContentsRef.current;
     const isFirst = base.length === 0;
-    const nextContents: Content[] = [...base, { role: "user", parts: [{ text: next.prompt }] }];
-    void runTurn(nextContents, next.wasVoice, isFirst ? next.prompt : null);
+    const parts: Part[] = [];
+    if (next.prompt) parts.push({ text: next.prompt });
+    if (next.image) parts.push({ inlineData: { mimeType: next.image.mimeType, data: next.image.data } });
+    if (!parts.length) parts.push({ text: "" });
+    const nextContents: Content[] = [...base, { role: "user", parts }];
+    void runTurn(nextContents, next.wasVoice, isFirst ? next.prompt || "Image" : null);
   }
 
   // Re-run the last turn on the existing history (which already ends with the
@@ -337,7 +386,24 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   async function retryLastTurn() {
     if (!thread || runningRef.current) return;
     setMessages((prev) => prev.filter((m) => !m.canRetry)); // drop the error notice
-    await runTurn(thread.contents, false, null);
+    await runTurn(liveContentsRef.current, false, null);
+  }
+
+  // Re-run the last user turn: drop the trailing model reply and regenerate.
+  function regenerateLast() {
+    if (runningRef.current || !thread) return;
+    const contents = liveContentsRef.current;
+    let i = contents.length - 1;
+    while (i >= 0 && contents[i].role !== "user") i--;
+    if (i < 0) return;
+    const truncated = contents.slice(0, i + 1);
+    liveContentsRef.current = truncated;
+    setMessages((prev) => {
+      let idx = prev.length - 1;
+      while (idx >= 0 && prev[idx].role !== "user") idx--;
+      return idx >= 0 ? prev.slice(0, idx + 1) : prev;
+    });
+    void runTurn(truncated, false, null);
   }
 
   async function runTurn(contents: Content[], wasVoice: boolean, titleFrom: string | null) {
@@ -438,22 +504,32 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     if (isUser) {
       return (
         <View style={[styles.bubble, styles.userBubble, styles.alignRight]}>
-          <Text style={styles.userText}>{item.text}</Text>
+          {item.imageUri ? <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" /> : null}
+          {item.text ? <Text style={styles.userText}>{item.text}</Text> : null}
         </View>
       );
     }
+    const isLast = item.id === messages[messages.length - 1]?.id;
     return (
       <View style={[styles.bubble, styles.modelBubble, styles.alignLeft]}>
+        {item.imageUri ? <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" /> : null}
         <Markdown style={mdStyles} rules={mdRules}>
           {withInlineImages(item.text)}
         </Markdown>
-        <TouchableOpacity onPress={() => speak(item)} style={styles.speakBtn} hitSlop={10}>
-          <Ionicons
-            name={speakingId === item.id ? "stop-circle" : "volume-high-outline"}
-            size={20}
-            color={speakingId === item.id ? theme.accent : theme.textDim}
-          />
-        </TouchableOpacity>
+        <View style={styles.bubbleActions}>
+          <TouchableOpacity onPress={() => speak(item)} hitSlop={10}>
+            <Ionicons
+              name={speakingId === item.id ? "stop-circle" : "volume-high-outline"}
+              size={20}
+              color={speakingId === item.id ? theme.accent : theme.textDim}
+            />
+          </TouchableOpacity>
+          {isLast ? (
+            <TouchableOpacity onPress={regenerateLast} hitSlop={10} disabled={busy}>
+              <Ionicons name="refresh" size={19} color={theme.textDim} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
       </View>
     );
   }
@@ -512,7 +588,20 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
 
       {busy ? <Text style={styles.keepOpen}>Keep Fraude open — leaving cancels this task. Send more to queue them.</Text> : null}
 
+      {pendingImage ? (
+        <View style={styles.attachPreview}>
+          <Image source={{ uri: pendingImage.uri }} style={styles.attachThumb} />
+          <Text style={styles.attachLabel}>Image attached</Text>
+          <TouchableOpacity onPress={() => setPendingImage(null)} hitSlop={8}>
+            <Ionicons name="close-circle" size={22} color={theme.textDim} />
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       <View style={styles.inputBar}>
+        <TouchableOpacity style={[styles.iconBtn, styles.iconBtnGhost]} onPress={pickImage}>
+          <Ionicons name="image-outline" size={22} color={theme.accent} />
+        </TouchableOpacity>
         <TextInput
           style={styles.input}
           value={input}
@@ -532,9 +621,9 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
           <Ionicons name={listening ? "stop" : "mic"} size={22} color={listening ? "#fff" : theme.accent} />
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.iconBtn, styles.sendBtn, !input.trim() && styles.sendBtnDisabled]}
+          style={[styles.iconBtn, styles.sendBtn, !input.trim() && !pendingImage && styles.sendBtnDisabled]}
           onPress={() => handleSendMessage(input)}
-          disabled={!input.trim()}
+          disabled={!input.trim() && !pendingImage}
         >
           <Ionicons name="arrow-up" size={22} color={theme.bg} />
         </TouchableOpacity>
@@ -583,6 +672,11 @@ const styles = StyleSheet.create({
   modelBubble: { backgroundColor: theme.modelBubble, borderWidth: 1, borderColor: theme.border },
   userText: { color: theme.userBubbleText, fontSize: 15, lineHeight: 21 },
   modelText: { color: theme.text, fontSize: 15, lineHeight: 21 },
+  attachImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 6 },
+  bubbleActions: { flexDirection: "row", gap: 16, alignSelf: "flex-end", marginTop: 6, alignItems: "center" },
+  attachPreview: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingBottom: 6 },
+  attachThumb: { width: 40, height: 40, borderRadius: 6 },
+  attachLabel: { color: theme.textDim, fontSize: 13, flex: 1 },
   errorBubble: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.danger },
   errorText: { color: theme.text, fontSize: 14, lineHeight: 20 },
   retryRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, alignSelf: "flex-start" },
