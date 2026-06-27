@@ -509,6 +509,32 @@ const UI_TOOLS: FunctionDeclaration[] = [
   },
 ];
 
+const READ_LOG_TOOL: FunctionDeclaration = {
+  name: "read_log",
+  description:
+    "Read the full output of the last run_termux/apply_patch command (un-truncated). The first view shows " +
+    "the start plus the end (where errors usually are); pass offset (from a previous readMoreOffset) to read " +
+    "the middle. Use this when output was truncated or a command was still running.",
+  parameters: {
+    type: "object",
+    properties: { offset: { type: "integer", description: "Character offset to read from (default 0)." } },
+  },
+};
+
+const APPLY_PATCH_TOOL: FunctionDeclaration = {
+  name: "apply_patch",
+  description:
+    "Apply a unified git diff to files in the current Termux session directory (surgical edit — far better " +
+    "than rewriting whole files). Provide a standard `git diff` (--- a/… / +++ b/… / @@ hunks). Runs `git " +
+    "apply` and returns success or the rejected-hunk errors so you can correct the diff. cd to the repo first " +
+    "with run_termux. Needs the user's confirmation.",
+  parameters: {
+    type: "object",
+    properties: { diff: { type: "string", description: "Unified diff text to apply." } },
+    required: ["diff"],
+  },
+};
+
 // The tools actually sent to Gemini for the current turn = built-in TOOLS plus
 // any connected MCP servers' tools (recomputed at the start of each turn).
 let activeTools: Tool[] = TOOLS;
@@ -523,6 +549,75 @@ async function substituteSecrets(text: string): Promise<string> {
     if (value !== null) out = out.split(m[0]).join(value);
   }
   return out;
+}
+
+// ---- Persistent Termux coding session ----
+// Each run_termux is a fresh `bash -c`, so we emulate a persistent session by
+// saving/restoring the working dir + exported env in a shared dir on each call
+// (cd, venv activation, exports all persist). Output goes to a full log file we
+// read back (Shizuku/root, or app-uid with All-files access) and page — no
+// bridge truncation; the error-bearing tail is always shown.
+const CODE_DIR = "/sdcard/fraude";
+const SESSION_LOG = `${CODE_DIR}/last.log`;
+const SESSION_CWD = `${CODE_DIR}/.cwd`;
+const SESSION_ENV = `${CODE_DIR}/.env`;
+const DONE_RE = /__FRAUDE_DONE_(-?\d+)__/;
+const MAX_LOG_VIEW = 12000;
+const LOG_TAIL = 3000;
+
+function sessionWrap(command: string): string {
+  return [
+    `mkdir -p ${CODE_DIR}`,
+    `cd "$(cat ${SESSION_CWD} 2>/dev/null || echo "$HOME")" 2>/dev/null || cd "$HOME"`,
+    `[ -f ${SESSION_ENV} ] && . ${SESSION_ENV} 2>/dev/null`,
+    `{ ${command} ; } > ${SESSION_LOG} 2>&1; __ec=$?`,
+    `pwd > ${SESSION_CWD} 2>/dev/null`,
+    `export -p > ${SESSION_ENV} 2>/dev/null`,
+    `echo "__FRAUDE_DONE_\${__ec}__" >> ${SESSION_LOG}`,
+  ].join("; ");
+}
+
+// Read a file via the best available privilege.
+async function readFileBest(path: string): Promise<string> {
+  if ((await Shell.shizukuStatus()).granted)
+    return (await Shell.execShizuku(`cat ${path} 2>/dev/null`, 8000)).stdout || "";
+  if (Shell.hasAllFilesAccess()) return (await Shell.exec(`cat ${path} 2>/dev/null`, false, 8000)).stdout || "";
+  return (await Shell.exec(`cat ${path} 2>/dev/null`, true, 8000)).stdout || ""; // su fallback
+}
+
+function canReadShared(): boolean {
+  return Shell.hasAllFilesAccess();
+}
+
+// Poll the session log until the done-marker appears; return exit code + body.
+async function awaitSession(signal?: AbortSignal): Promise<{ exitCode: number | null; content: string }> {
+  for (let i = 0; i < 20; i++) {
+    if (signal?.aborted) throw new AbortedError();
+    await sleep(1500, signal);
+    const raw = await readFileBest(SESSION_LOG);
+    const m = raw.match(DONE_RE);
+    if (m) return { exitCode: parseInt(m[1], 10), content: raw.replace(DONE_RE, "").replace(/\s+$/, "") };
+  }
+  return { exitCode: null, content: (await readFileBest(SESSION_LOG)).replace(DONE_RE, "") };
+}
+
+// Page a big log: full if small; else head + always-included tail, with an offset
+// to read the middle. Mirrors fetch_webpage paging.
+function pageLog(content: string, offset = 0): { view: string; total: number; nextOffset: number | null } {
+  const total = content.length;
+  if (total <= MAX_LOG_VIEW) return { view: content, total, nextOffset: null };
+  if (offset > 0) {
+    const slice = content.slice(offset, offset + MAX_LOG_VIEW);
+    return { view: slice, total, nextOffset: offset + MAX_LOG_VIEW < total ? offset + MAX_LOG_VIEW : null };
+  }
+  const head = content.slice(0, MAX_LOG_VIEW - LOG_TAIL);
+  const tail = content.slice(total - LOG_TAIL);
+  const omitted = total - (MAX_LOG_VIEW - LOG_TAIL) - LOG_TAIL;
+  return {
+    view: `${head}\n...[${omitted} chars omitted — call read_log with offset ${MAX_LOG_VIEW - LOG_TAIL} for the middle]...\n${tail}`,
+    total,
+    nextOffset: MAX_LOG_VIEW - LOG_TAIL,
+  };
 }
 
 type ToolExecutor = (
@@ -593,10 +688,7 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
       return { ok: false, error: "Shell execution is disabled. The user can turn it on in Settings → Advanced mode." };
     const command = String(args.command ?? "");
     if (!command.trim()) return { ok: false, error: "Missing command." };
-    const out = "/data/data/com.termux/files/home/.fraude_termux_out";
-    // Run in Termux, capturing stdout+stderr and a done-marker with the exit code.
-    const wrapped = `{ ${command} ; } > ${out} 2>&1; echo "__FRAUDE_DONE_$?__" >> ${out}`;
-    const fired = await Shell.runTermux(wrapped);
+    const fired = await Shell.runTermux(sessionWrap(command));
     if (!fired.ok)
       return {
         ok: false,
@@ -604,25 +696,55 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
           (fired.error ? fired.error + ". " : "") +
           "Couldn't start Termux. Ensure Termux is installed and ~/.termux/termux.properties has allow-external-apps=true.",
       };
-    // Read the output back. Termux's home is private, so reading needs shizuku/root.
-    const z = await Shell.shizukuStatus();
-    const read = () =>
-      z.granted ? Shell.execShizuku(`cat ${out} 2>/dev/null`, 5000) : Shell.exec(`cat ${out} 2>/dev/null`, true, 5000);
-    for (let i = 0; i < 15; i++) {
-      if (signal?.aborted) throw new AbortedError();
-      await sleep(2000, signal);
-      const r = await read();
-      const m = (r.stdout || "").match(/__FRAUDE_DONE_(\d+)__/);
-      if (m) {
-        const exitCode = parseInt(m[1], 10);
-        const stdout = (r.stdout || "").replace(/__FRAUDE_DONE_\d+__\s*$/, "").trim();
-        return { ok: exitCode === 0, exitCode, stdout };
-      }
+    const { exitCode, content } = await awaitSession(signal);
+    if (exitCode === null) {
+      const canRead = (await Shell.shizukuStatus()).granted || canReadShared();
+      return {
+        ok: false,
+        timedOut: true,
+        note: canRead
+          ? "Still running — call read_log to check progress/output."
+          : "Couldn't read Termux output. For no-root coding, enable All files access in Settings → Advanced mode (or use Shizuku/root).",
+      };
     }
+    const { view, total, nextOffset } = pageLog(content);
     return {
-      ok: false,
-      timedOut: true,
-      note: "Started in Termux but couldn't read output within the time limit (either still running, or reading Termux's files needs Shizuku/root).",
+      ok: exitCode === 0,
+      exitCode,
+      stdout: view,
+      totalChars: total,
+      ...(nextOffset != null ? { readMoreOffset: nextOffset } : {}),
+    };
+  },
+  read_log: async (args) => {
+    const offset = typeof args.offset === "number" && args.offset > 0 ? Math.floor(args.offset) : 0;
+    const content = (await readFileBest(SESSION_LOG)).replace(DONE_RE, "");
+    if (!content) return { ok: true, stdout: "(no output captured yet)" };
+    const { view, total, nextOffset } = pageLog(content, offset);
+    return { ok: true, stdout: view, totalChars: total, ...(nextOffset != null ? { readMoreOffset: nextOffset } : {}) };
+  },
+  apply_patch: async (args, signal) => {
+    if (!(await getShellEnabled()))
+      return { ok: false, error: "Shell execution is disabled. The user can turn it on in Settings → Advanced mode." };
+    const diff = String(args.diff ?? "");
+    if (!diff.trim()) return { ok: false, error: "Missing diff (provide a unified git diff)." };
+    const eof = "FRAUDE_PATCH_EOF";
+    // Write the diff via a heredoc (no arg-escaping issues), then git apply it in
+    // the session's current directory.
+    const inner = [
+      `cat > ${CODE_DIR}/patch.diff <<'${eof}'`,
+      diff,
+      eof,
+      `git apply --whitespace=nowarn ${CODE_DIR}/patch.diff && echo "PATCH_APPLIED" || git apply --3way --whitespace=nowarn ${CODE_DIR}/patch.diff`,
+    ].join("\n");
+    const fired = await Shell.runTermux(sessionWrap(inner));
+    if (!fired.ok) return { ok: false, error: fired.error || "Couldn't start Termux." };
+    const { exitCode, content } = await awaitSession(signal);
+    if (exitCode === null) return { ok: false, timedOut: true, note: "Couldn't read result; check read_log." };
+    return {
+      ok: exitCode === 0,
+      exitCode,
+      stdout: content.slice(0, MAX_LOG_VIEW) || (exitCode === 0 ? "Patch applied." : "git apply failed — check the diff against current files."),
     };
   },
   ui_screen: async () => {
@@ -841,7 +963,7 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
       "com.lukeet332.byokgeminiagent android.permission.PACKAGE_USAGE_STATS', 'shizuku').";
     // Real-toolchain coding loop (Termux) — like a CLI build/test cycle.
     avail +=
-      " CODING WITH REAL TOOLCHAINS: run_shell has no compilers; use run_termux(command) instead — it runs in Termux where python/node/clang/git/make live. Work like a CLI agent: clone or open a project, make a SURGICAL edit (write just the changed file/lines), then run_termux the build/test ('npm test', 'python -m pytest', 'gcc … && ./a'), READ the output, and fix failures — loop until green. Use real local git in Termux (git checkout -b, git diff to verify, git commit, git push) rather than blind whole-file GitHub commits.";
+      " CODING WITH REAL TOOLCHAINS: run_shell has no compilers; use run_termux(command) instead — it runs in Termux where python/node/clang/git/make live. It's a PERSISTENT session: your working directory (cd) and exported env (incl. activated virtualenvs) carry over between run_termux calls, so cd into the repo once and keep going. Output is captured in FULL — the result shows the start + the end (errors are usually at the end); if it's truncated or the command was still running, call read_log(offset) to read the rest. For edits, prefer apply_patch(diff) with a unified git diff (surgical) over rewriting whole files. Loop like a CLI agent: cd repo → apply_patch or edit → run_termux build/test ('npm test', 'pytest', 'gcc … && ./a') → read output → fix → repeat until green. Use real local git in Termux (git checkout -b, git diff, git commit, git push). NOTE: reading Termux output needs Shizuku, root, OR All files access (Settings → Advanced) — if it can't read output, tell the user to enable one of those.";
     // Robust UI automation — never guess coordinates (CLI-style hierarchy lookup).
     avail +=
       " UI AUTOMATION (with shizuku/root): to drive another app, do NOT guess tap coordinates. First dump the screen — run_shell('uiautomator dump /sdcard/v.xml && cat /sdcard/v.xml', 'shizuku') — find the target node by its text/resource-id, read its bounds [x1,y1][x2,y2], then tap the CENTRE: run_shell('input tap <cx> <cy>', 'shizuku'). Re-dump after each step to confirm the new screen state. Use 'input text', 'input keyevent', and 'am start' similarly.";
@@ -1382,6 +1504,8 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "update_setting") return `Updating setting: ${String(call.args?.key ?? "")}`;
   if (call.name === "run_shell") return `Running command: ${String(call.args?.command ?? "")}`;
   if (call.name === "run_termux") return `Running in Termux: ${String(call.args?.command ?? "")}`;
+  if (call.name === "read_log") return "Reading output...";
+  if (call.name === "apply_patch") return "Applying patch...";
   if (call.name === "ui_screen") return "Reading the screen...";
   if (call.name === "ui_tap") return `Tapping: ${String(call.args?.text ?? call.args?.id ?? "")}`;
   if (call.name === "ui_type") return "Typing...";
@@ -1407,7 +1531,7 @@ export async function runAgentTurn(
   // the prompt, so it can name the live integrations).
   const shellOn = await getShellEnabled().catch(() => false);
   const builtins = [...TOOLS[0].functionDeclarations];
-  if (shellOn) builtins.push(SHELL_TOOL, TERMUX_TOOL);
+  if (shellOn) builtins.push(SHELL_TOOL, TERMUX_TOOL, READ_LOG_TOOL, APPLY_PATCH_TOOL);
   if (Shell.a11yEnabled()) builtins.push(...UI_TOOLS);
   try {
     await McpClient.ensureConnections();
@@ -1477,6 +1601,10 @@ export async function runAgentTurn(
           needsConfirm = true;
           confirmMethod = "SHELL";
           confirmUrl = `[termux] ${String(a.command ?? "")}`;
+        } else if (call.name === "apply_patch") {
+          needsConfirm = true;
+          confirmMethod = "FILE";
+          confirmUrl = "apply a git patch in the Termux session";
         } else if (call.name === "ui_tap") {
           needsConfirm = true;
           confirmMethod = "UI";

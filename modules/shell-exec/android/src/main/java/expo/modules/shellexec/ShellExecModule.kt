@@ -2,7 +2,9 @@ package expo.modules.shellexec
 
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.Settings
 import android.text.TextUtils
 import expo.modules.kotlin.Promise
@@ -82,6 +84,27 @@ class ShellExecModule : Module() {
       } catch (e: Throwable) {
         mapOf("ok" to false, "error" to (e.message ?: e.toString()))
       }
+    }
+
+    // All-files access — lets the app (uid) read /sdcard generally, so it can
+    // read build output Termux wrote to a shared dir WITHOUT root or Shizuku.
+    Function("hasAllFilesAccess") {
+      if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager() else true
+    }
+
+    Function("requestAllFilesAccess") {
+      val ctx = appContext.reactContext ?: return@Function false
+      if (Build.VERSION.SDK_INT >= 30) {
+        val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+          .setData(Uri.parse("package:${ctx.packageName}"))
+          .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+          ctx.startActivity(intent)
+        } catch (_: Throwable) {
+          ctx.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+      }
+      true
     }
 
     // ---- Accessibility-based UI automation (no root / Shizuku needed) ----

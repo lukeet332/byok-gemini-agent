@@ -30,6 +30,8 @@ interface NativeShell {
   a11yTapId: (id: string) => Promise<boolean>;
   a11ySetText: (text: string) => Promise<boolean>;
   a11yGlobal: (action: string) => Promise<boolean>;
+  hasAllFilesAccess: () => boolean;
+  requestAllFilesAccess: () => boolean;
 }
 
 let native: NativeShell | null = null;
@@ -126,4 +128,21 @@ export async function a11ySetText(text: string): Promise<boolean> {
 
 export async function a11yGlobal(action: string): Promise<boolean> {
   return native ? native.a11yGlobal(action) : false;
+}
+
+// All-files access (lets the app read /sdcard, e.g. Termux's shared output dir).
+export function hasAllFilesAccess(): boolean {
+  try {
+    return native ? native.hasAllFilesAccess() : false;
+  } catch {
+    return false;
+  }
+}
+
+export function requestAllFilesAccess(): void {
+  try {
+    native?.requestAllFilesAccess();
+  } catch {
+    // ignore
+  }
 }

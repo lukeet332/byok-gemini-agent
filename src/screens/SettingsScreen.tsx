@@ -53,7 +53,9 @@ import { clearErrors, listErrorsByThread, ErrorGroup } from "../storage/ErrorLog
 import { requestNotificationPermission } from "../agent/Background";
 import {
   a11yEnabled,
+  hasAllFilesAccess,
   openA11ySettings,
+  requestAllFilesAccess,
   requestShizukuPermission,
   shizukuStatus,
   ShizukuStatus,
@@ -103,6 +105,7 @@ export default function SettingsScreen() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [shizuku, setShizuku] = useState<ShizukuStatus>({ running: false, granted: false });
   const [a11yOn, setA11yOn] = useState(false);
+  const [allFiles, setAllFiles] = useState(false);
   const [userNotes, setUserNotes] = useState("");
   // Live model list from Google (null = loading/failed -> use presets).
   const [modelMenu, setModelMenu] = useState(false);
@@ -137,6 +140,7 @@ export default function SettingsScreen() {
       setConfirmSystemState(await getConfirmSystemActions());
       setShizuku(await shizukuStatus());
       setA11yOn(a11yEnabled());
+      setAllFiles(hasAllFilesAccess());
       setGithubToken(await getGithubToken());
       setWriteMode(await getWriteMode());
       setSystemPrompt(await getSystemPrompt());
@@ -712,6 +716,18 @@ export default function SettingsScreen() {
             </Text>
             <Link label="Get Termux (F-Droid) →" url="https://f-droid.org/packages/com.termux/" />
             <Link label="Get Termux:API (F-Droid) →" url="https://f-droid.org/packages/com.termux.api/" />
+            <Text style={[styles.hint, { marginTop: 10 }]}>
+              To read Termux build output WITHOUT root or Shizuku, grant All files access — Fraude then reads
+              the output it captures to shared storage.{"\n"}Status: {allFiles ? "granted ✓" : "not granted"}.
+            </Text>
+            <View style={styles.advButtons}>
+              <TouchableOpacity style={styles.advBtn} onPress={() => requestAllFilesAccess()}>
+                <Text style={styles.advBtnText}>Grant All files access</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.advBtn} onPress={() => setAllFiles(hasAllFilesAccess())}>
+                <Text style={styles.advBtnText}>Refresh</Text>
+              </TouchableOpacity>
+            </View>
           </>
         ) : null}
 
