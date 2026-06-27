@@ -51,6 +51,8 @@ export interface ChatMessage {
   id: string;
   role: Role;
   text: string;
+  // A tappable system notice (e.g. rate-limit prompt that opens Settings).
+  action?: "open_settings";
 }
 
 // ---- Threads (locally persisted conversations) ----

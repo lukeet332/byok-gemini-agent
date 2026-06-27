@@ -1,12 +1,14 @@
 {
   "expo": {
-    "name": "BYOK Gemini Agent",
+    "name": "Fraude",
     "slug": "byok-gemini-agent",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
+    "icon": "./assets/icon.png",
     "splash": {
+      "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#0b0f14"
     },
@@ -19,7 +21,11 @@
     },
     "android": {
       "package": "com.lukeet332.byokgeminiagent",
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0b0f14"
+      }
     },
     "plugins": [
       "expo-secure-store",
@@ -30,6 +36,14 @@
           "android": {
             "kotlinVersion": "1.9.25"
           }
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow the app to use the microphone for voice input.",
+          "speechRecognitionPermission": "Allow the app to recognise your speech for voice input.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
         }
       ]
     ]

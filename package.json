@@ -17,6 +17,8 @@
     "expo-build-properties": "~0.13.3",
     "expo-file-system": "~18.0.12",
     "expo-secure-store": "~14.0.0",
+    "expo-speech": "~13.0.1",
+    "expo-speech-recognition": "^56.0.1",
     "expo-status-bar": "~2.0.0",
     "react": "18.3.1",
     "react-native": "0.76.5",
@@ -26,6 +28,7 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~18.3.12",
+    "sharp": "^0.35.2",
     "typescript": "^5.3.3"
   }
 }

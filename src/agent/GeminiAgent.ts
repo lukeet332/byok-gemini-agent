@@ -8,11 +8,49 @@
 // before a request, so raw secret values never reach the model.
 
 import { Content, FunctionCall, Part, Tool } from "../types";
-import { getGeminiKey, getSecretValue, listSecretNames } from "../storage/SecureStorage";
+import { getGeminiKey, getJinaKey, getModel, getSecretValue, getSystemPrompt, listSecretNames } from "../storage/SecureStorage";
 import { appendError } from "../storage/ErrorLogStore";
 
-const GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+// Default model + the presets offered in Settings. Users can also type any
+// model id (e.g. a newer one) as a custom value.
+export const DEFAULT_MODEL = "gemini-2.5-flash";
+export const MODEL_PRESETS = [
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash",
+];
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
+
+// Build the generateContent endpoint for the currently-selected model.
+async function genEndpoint(): Promise<string> {
+  const model = (await getModel()) || DEFAULT_MODEL;
+  return `${GEMINI_BASE}${model}:generateContent`;
+}
+
+// Fetch the live list of Gemini models that support generateContent, straight
+// from Google (so new models like newer flash/pro versions appear automatically).
+// Returns [] on any failure; callers fall back to MODEL_PRESETS.
+export async function listModels(): Promise<string[]> {
+  const apiKey = await getGeminiKey();
+  if (!apiKey) return [];
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=${encodeURIComponent(apiKey)}`
+    );
+    const data = (await res.json().catch(() => ({}))) as {
+      models?: { name?: string; supportedGenerationMethods?: string[] }[];
+    };
+    if (!res.ok || !Array.isArray(data.models)) return [];
+    return data.models
+      .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+      .map((m) => (m.name ?? "").replace(/^models\//, ""))
+      .filter((id) => id.startsWith("gemini"))
+      .sort();
+  } catch {
+    return [];
+  }
+}
 
 // Safety valve: never loop forever if the model keeps requesting tools. Set
 // high enough to allow deep multi-step chains (fetch -> API -> API -> ...).
@@ -20,6 +58,38 @@ const MAX_TOOL_ROUNDS = 12;
 // Cap tool output fed back to the model (context + cost control).
 const MAX_API_CHARS = 8000;
 const MAX_PAGE_CHARS = 16000;
+const MAX_SEARCH_CHARS = 8000;
+
+// Present as a real browser so naive user-agent blocks don't reject us.
+const BROWSER_UA =
+  "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
+const BROWSER_HEADERS: Record<string, string> = {
+  "User-Agent": BROWSER_UA,
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
+// Jina endpoints give us a JS-rendering reader and a web search with NO key
+// required (a free JINA_KEY secret, if present, just raises rate limits).
+const JINA_READER = "https://r.jina.ai/";
+const JINA_SEARCH = "https://s.jina.ai/";
+
+// The agent's default persona / operating manual. Users can override it in
+// Settings; an empty override falls back to this.
+export const DEFAULT_SYSTEM_PROMPT = [
+  "You are a capable, autonomous assistant running entirely on the user's phone — like a command-line agent, not a sandboxed chatbot. You have REAL internet access.",
+  "",
+  "Tools:",
+  "- web_search(query): search the web; returns top results with readable content.",
+  "- fetch_webpage(url): read a specific page as clean text.",
+  "- http_request(method,url,headers,body): call ANY API. Authenticate by putting {{SECRET_NAME}} in the url/headers/body — values are substituted on-device; you never see them.",
+  "",
+  "Behaviour:",
+  "- Be proactive: when a question needs current or external info, USE the tools instead of guessing or saying you can't browse.",
+  "- Chain steps: search -> open the most relevant pages -> extract what matters -> (optionally call APIs) -> synthesise.",
+  "- Verify before asserting. Prefer primary sources; cite the URLs you used.",
+  "- If a tool fails, read the error, adjust (different URL, headers, or query) and retry a couple of times before giving up.",
+  "- Be concise and direct. Use markdown. Include relevant image URLs so they render inline.",
+].join("\n");
 
 // ---- Tool schema (Gemini function declarations) ----
 export const TOOLS: Tool[] = [
@@ -52,16 +122,29 @@ export const TOOLS: Tool[] = [
       {
         name: "fetch_webpage",
         description:
-          "Fetch a web page and return its readable text content (HTML markup, " +
-          "scripts, and styles stripped out) so you can read and digest it as " +
-          "context. Use this to look things up, read articles, or gather " +
-          "information before answering.",
+          "Fetch a web page and return its readable text content (markup, scripts " +
+          "and styles removed; JavaScript-rendered pages supported) so you can " +
+          "read and digest it as context. Use after web_search to open a specific result.",
         parameters: {
           type: "object",
           properties: {
             url: { type: "string", description: "Full URL of the page to read, including https://." },
           },
           required: ["url"],
+        },
+      },
+      {
+        name: "web_search",
+        description:
+          "Search the web and get back the top results with their readable " +
+          "content. Use this FIRST when you need to find information, products, " +
+          "reviews, news, or any page whose URL you don't already know.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "The search query." },
+          },
+          required: ["query"],
         },
       },
     ],
@@ -105,7 +188,14 @@ type ToolExecutor = (args: Record<string, unknown>) => Promise<Record<string, un
 const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
   http_request: executeHttpRequest,
   fetch_webpage: executeFetchWebpage,
+  web_search: executeWebSearch,
 };
+
+// Optional Jina auth header to raise free rate limits, if the user stored a key.
+async function jinaHeaders(): Promise<Record<string, string>> {
+  const key = await getJinaKey();
+  return key ? { Authorization: `Bearer ${key}` } : {};
+}
 
 async function executeHttpRequest(args: Record<string, unknown>): Promise<Record<string, unknown>> {
   const method = String(args.method ?? "GET").toUpperCase();
@@ -113,7 +203,8 @@ async function executeHttpRequest(args: Record<string, unknown>): Promise<Record
   if (!rawUrl) return { ok: false, error: "Missing url." };
   const url = await substituteSecrets(rawUrl);
 
-  const headers: Record<string, string> = {};
+  // Default to browser-like headers; any header the model set takes precedence.
+  const headers: Record<string, string> = { ...BROWSER_HEADERS };
   if (typeof args.headers === "string" && args.headers.trim()) {
     try {
       const parsed = JSON.parse(await substituteSecrets(args.headers));
@@ -142,25 +233,76 @@ async function executeHttpRequest(args: Record<string, unknown>): Promise<Record
   }
 }
 
+// Fetch direct, fall back to stripped HTML. Used if the Jina reader is down.
+async function fetchDirect(url: string): Promise<{ ok: boolean; status: number; text: string }> {
+  const res = await fetch(url, { headers: { ...BROWSER_HEADERS, Accept: "text/html,*/*" } });
+  const raw = await res.text();
+  const looksHtml = /<html|<body|<!doctype/i.test(raw) || (res.headers.get("content-type") ?? "").includes("html");
+  return { ok: res.ok, status: res.status, text: looksHtml ? htmlToText(raw) : raw };
+}
+
 async function executeFetchWebpage(args: Record<string, unknown>): Promise<Record<string, unknown>> {
   const url = typeof args.url === "string" ? args.url : "";
   if (!url) return { ok: false, error: "Missing url." };
+  const clip = (t: string) => (t.length > MAX_PAGE_CHARS ? t.slice(0, MAX_PAGE_CHARS) + "\n...[truncated]" : t);
+
+  // Prefer the JS-rendering reader (handles dynamic, script-heavy pages).
+  let rateLimited = false;
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (BYOK-Gemini-Agent)", Accept: "text/html,*/*" },
+    const res = await fetch(JINA_READER + url, {
+      headers: { ...BROWSER_HEADERS, Accept: "text/plain", ...(await jinaHeaders()) },
     });
-    const raw = await res.text();
-    const looksHtml = /<html|<body|<!doctype/i.test(raw) || (res.headers.get("content-type") ?? "").includes("html");
-    const text = looksHtml ? htmlToText(raw) : raw;
-    const truncated = text.length > MAX_PAGE_CHARS;
-    return {
-      ok: res.ok,
-      status: res.status,
-      url,
-      content: truncated ? text.slice(0, MAX_PAGE_CHARS) + "\n...[truncated]" : text,
-    };
+    const text = await res.text();
+    if (res.status === 429) rateLimited = true;
+    else if (res.ok && text.trim()) return { ok: true, status: res.status, url, content: clip(text) };
+  } catch {
+    // fall through to direct
+  }
+
+  // Fallback: direct fetch + HTML strip.
+  try {
+    const d = await fetchDirect(url);
+    return { ok: d.ok, status: d.status, url, content: clip(d.text), ...(rateLimited ? { rateLimited: true, provider: "jina" } : {}) };
   } catch (err) {
-    return { ok: false, error: `Could not fetch page: ${String(err)}` };
+    return { ok: false, error: `Could not fetch page: ${String(err)}`, ...(rateLimited ? { rateLimited: true, provider: "jina" } : {}) };
+  }
+}
+
+// Keyless fallback search: DuckDuckGo's no-JS HTML endpoint (titles/snippets/links).
+async function ddgSearch(query: string): Promise<{ ok: boolean; status: number; text: string }> {
+  const res = await fetch("https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query), {
+    headers: { ...BROWSER_HEADERS, Accept: "text/html,*/*" },
+  });
+  const raw = await res.text();
+  return { ok: res.ok, status: res.status, text: htmlToText(raw) };
+}
+
+async function executeWebSearch(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const query = typeof args.query === "string" ? args.query.trim() : "";
+  if (!query) return { ok: false, error: "Missing query." };
+  const clip = (t: string) => (t.length > MAX_SEARCH_CHARS ? t.slice(0, MAX_SEARCH_CHARS) + "\n...[truncated]" : t);
+
+  // Primary: Jina search (results + readable content).
+  let rateLimited = false;
+  try {
+    const res = await fetch(JINA_SEARCH + encodeURIComponent(query), {
+      headers: { ...BROWSER_HEADERS, Accept: "text/plain", ...(await jinaHeaders()) },
+    });
+    const text = await res.text();
+    if (res.status === 429) rateLimited = true;
+    else if (res.ok && text.trim()) return { ok: true, status: res.status, query, source: "jina", results: clip(text) };
+  } catch {
+    // fall through to DuckDuckGo
+  }
+
+  // Fallback: DuckDuckGo HTML (keyless, links + snippets).
+  const rl = rateLimited ? { rateLimited: true, provider: "jina" } : {};
+  try {
+    const d = await ddgSearch(query);
+    if (d.ok && d.text.trim()) return { ok: true, status: d.status, query, source: "duckduckgo", results: clip(d.text), ...rl };
+    return { ok: false, status: d.status, error: `Search failed (${d.status}).`, ...rl };
+  } catch (err) {
+    return { ok: false, error: `Search error: ${String(err)}`, ...rl };
   }
 }
 
@@ -173,43 +315,28 @@ interface GeminiResponse {
 }
 
 async function buildSystemInstruction(memo?: string): Promise<Content> {
+  const custom = await getSystemPrompt();
+  const base = custom.trim() || DEFAULT_SYSTEM_PROMPT;
+
   const names = await listSecretNames();
   const secretsLine =
     names.length > 0
-      ? `The user has stored these secret credentials, usable by referencing ` +
-        `them as {{NAME}} in an http_request: ${names.join(", ")}. You never see ` +
-        `their real values.`
-      : `The user has not stored any secret credentials yet. If a request needs ` +
-        `one, tell them to add it in Settings.`;
+      ? `\n\nStored secrets you can reference as {{NAME}} (values hidden from you): ${names.join(", ")}.`
+      : `\n\nNo secret credentials are stored yet; if a request needs one, tell the user to add it in Settings.`;
 
   const memoBlock =
     memo && memo.trim()
       ? `\n\nDense memory of earlier conversation (your own notes, may be terse):\n${memo.trim()}`
       : "";
 
-  return {
-    role: "user",
-    parts: [
-      {
-        text:
-          "You are a capable assistant running entirely on the user's device, " +
-          "like a command-line agent but on a phone. You have real internet " +
-          "access via two tools: fetch_webpage (read pages as text) and " +
-          "http_request (call any API). Use them proactively to look things up " +
-          "and take actions rather than guessing or saying you can't browse. " +
-          secretsLine +
-          " After using a tool, summarise what you found or did in plain language." +
-          memoBlock,
-      },
-    ],
-  };
+  return { role: "user", parts: [{ text: base + secretsLine + memoBlock }] };
 }
 
 async function callGemini(contents: Content[], systemInstruction: Content): Promise<Content> {
   const apiKey = await getGeminiKey();
   if (!apiKey) throw new Error("No Gemini API key. Add it in Settings.");
 
-  const res = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+  const res = await fetch(`${await genEndpoint()}?key=${encodeURIComponent(apiKey)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ contents, tools: TOOLS, systemInstruction }),
@@ -245,6 +372,8 @@ export interface AgentCallbacks {
 export interface AgentResult {
   contents: Content[];
   reply: string;
+  // True if a Jina (search/reader) call hit the keyless rate limit this turn.
+  jinaRateLimited?: boolean;
 }
 // Context for attributing error-log entries to the originating chat.
 export interface AgentContext {
@@ -284,6 +413,7 @@ async function maybeLogFailure(
 function statusFor(call: FunctionCall): string {
   const url = typeof call.args?.url === "string" ? call.args.url : "";
   if (call.name === "fetch_webpage") return `Reading page: ${url}`;
+  if (call.name === "web_search") return `Searching: ${String(call.args?.query ?? "")}`;
   if (call.name === "http_request") return `Calling API: ${String(call.args?.method ?? "")} ${url}`.trim();
   return `Running tool: ${call.name}...`;
 }
@@ -299,6 +429,7 @@ export async function runAgentTurn(
   const history: Content[] = [...contents];
   const setStatus = callbacks.onStatus ?? (() => {});
   const systemInstruction = await buildSystemInstruction(memo);
+  let jinaRateLimited = false;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     setStatus("Thinking...");
@@ -308,7 +439,7 @@ export async function runAgentTurn(
     const calls = functionCallsIn(modelTurn);
     if (calls.length === 0) {
       setStatus(null);
-      return { contents: history, reply: textIn(modelTurn) || "(no response)" };
+      return { contents: history, reply: textIn(modelTurn) || "(no response)", jinaRateLimited };
     }
 
     const responseParts: Part[] = [];
@@ -325,6 +456,7 @@ export async function runAgentTurn(
           result = { ok: false, error: String(err) };
         }
       }
+      if (result.rateLimited === true) jinaRateLimited = true;
       await maybeLogFailure(call, result, ctx);
       responseParts.push({ functionResponse: { name: call.name, response: result } });
     }
@@ -367,7 +499,7 @@ export async function compactConversation(memo: string, turnsToFold: Content[]):
     "Use terse bullet shorthand. Output ONLY the updated memory text.\n\n" +
     `PRIOR MEMORY:\n${memo || "(none)"}\n\nNEW EXCHANGES:\n${renderTurns(turnsToFold)}`;
 
-  const res = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+  const res = await fetch(`${await genEndpoint()}?key=${encodeURIComponent(apiKey)}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] }),
@@ -385,7 +517,7 @@ export async function suggestTitle(firstMessage: string): Promise<string> {
   const apiKey = await getGeminiKey();
   if (!apiKey) return firstMessage.slice(0, 40);
   try {
-    const res = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+    const res = await fetch(`${await genEndpoint()}?key=${encodeURIComponent(apiKey)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

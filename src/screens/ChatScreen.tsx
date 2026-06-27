@@ -18,6 +18,11 @@ import {
   View,
 } from "react-native";
 import Markdown from "react-native-markdown-display";
+import * as Speech from "expo-speech";
+import {
+  ExpoSpeechRecognitionModule,
+  useSpeechRecognitionEvent,
+} from "expo-speech-recognition";
 
 import { compactConversation, runAgentTurn, suggestTitle } from "../agent/GeminiAgent";
 import {
@@ -53,6 +58,17 @@ function toMessages(contents: Content[]): ChatMessage[] {
   return out;
 }
 
+// Strip markdown/URLs so text-to-speech reads cleanly.
+function plainText(text: string): string {
+  return text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/[*_`#>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // Wrap bare image URLs in markdown image syntax so they render as images.
 function withInlineImages(text: string): string {
   return text.replace(
@@ -76,15 +92,56 @@ function safeSplit(contents: Content[]): number {
 interface Props {
   threadId: string;
   onThreadChanged: () => void; // tell the list to refresh (title/updatedAt)
+  onOpenSettings: () => void; // navigate to Settings (for tappable notices)
 }
 
-export default function ChatScreen({ threadId, onThreadChanged }: Props) {
+export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }: Props) {
   const [thread, setThread] = useState<Thread | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
+
+  // Speech-to-text: stream the transcript into the input box.
+  useSpeechRecognitionEvent("result", (e) => {
+    const t = e.results?.[0]?.transcript;
+    if (typeof t === "string") setInput(t);
+  });
+  useSpeechRecognitionEvent("end", () => setListening(false));
+  useSpeechRecognitionEvent("error", () => setListening(false));
+
+  async function toggleMic() {
+    if (listening) {
+      ExpoSpeechRecognitionModule.stop();
+      setListening(false);
+      return;
+    }
+    const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!perm.granted) return;
+    setInput("");
+    setListening(true);
+    ExpoSpeechRecognitionModule.start({ lang: "en-GB", interimResults: true });
+  }
+
+  // Text-to-speech: read a model reply aloud (British English by default).
+  function speak(msg: ChatMessage) {
+    if (speakingId === msg.id) {
+      Speech.stop();
+      setSpeakingId(null);
+      return;
+    }
+    Speech.stop();
+    setSpeakingId(msg.id);
+    Speech.speak(plainText(msg.text), {
+      language: "en-GB",
+      onDone: () => setSpeakingId(null),
+      onStopped: () => setSpeakingId(null),
+      onError: () => setSpeakingId(null),
+    });
+  }
 
   useEffect(() => {
     let active = true;
@@ -103,8 +160,8 @@ export default function ChatScreen({ threadId, onThreadChanged }: Props) {
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
   }
 
-  function pushMessage(role: ChatMessage["role"], text: string) {
-    setMessages((prev) => [...prev, { id: nextId(), role, text }]);
+  function pushMessage(role: ChatMessage["role"], text: string, action?: ChatMessage["action"]) {
+    setMessages((prev) => [...prev, { id: nextId(), role, text, action }]);
     scrollToEnd();
   }
 
@@ -150,6 +207,13 @@ export default function ChatScreen({ threadId, onThreadChanged }: Props) {
       await saveThread(updated);
       onThreadChanged();
       pushMessage("model", result.reply);
+      if (result.jinaRateLimited) {
+        pushMessage(
+          "model",
+          "Web search/reading hit the free Jina rate limit. Tap here to add a free Jina key in Settings for higher limits.",
+          "open_settings"
+        );
+      }
     } catch (err) {
       pushMessage("model", `Error: ${String(err instanceof Error ? err.message : err)}`);
       const updated = { ...thread, contents: nextContents, updatedAt: Date.now() };
@@ -163,6 +227,13 @@ export default function ChatScreen({ threadId, onThreadChanged }: Props) {
   }
 
   function renderItem({ item }: ListRenderItemInfo<ChatMessage>) {
+    if (item.action === "open_settings") {
+      return (
+        <TouchableOpacity style={styles.notice} onPress={onOpenSettings}>
+          <Text style={styles.noticeText}>{item.text}</Text>
+        </TouchableOpacity>
+      );
+    }
     const isUser = item.role === "user";
     if (isUser) {
       return (
@@ -176,6 +247,9 @@ export default function ChatScreen({ threadId, onThreadChanged }: Props) {
         <Markdown style={mdStyles} rules={mdRules}>
           {withInlineImages(item.text)}
         </Markdown>
+        <TouchableOpacity onPress={() => speak(item)} style={styles.speakBtn} hitSlop={8}>
+          <Text style={styles.speakText}>{speakingId === item.id ? "■ Stop" : "🔊 Listen"}</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -199,6 +273,7 @@ export default function ChatScreen({ threadId, onThreadChanged }: Props) {
         data={messages}
         keyExtractor={(m) => m.id}
         renderItem={renderItem}
+        extraData={speakingId}
         contentContainerStyle={styles.listContent}
         onContentSizeChange={scrollToEnd}
         ListEmptyComponent={
@@ -225,11 +300,18 @@ export default function ChatScreen({ threadId, onThreadChanged }: Props) {
           style={styles.input}
           value={input}
           onChangeText={setInput}
-          placeholder="Message"
+          placeholder={listening ? "Listening…" : "Message"}
           placeholderTextColor={theme.textDim}
           multiline
           editable={!busy}
         />
+        <TouchableOpacity
+          style={[styles.micBtn, listening && styles.micActive]}
+          onPress={toggleMic}
+          disabled={busy}
+        >
+          <Text style={styles.micText}>{listening ? "●" : "🎤"}</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={[styles.sendBtn, (busy || !input.trim()) && styles.sendBtnDisabled]}
           onPress={() => handleSendMessage(input)}
@@ -268,6 +350,18 @@ const styles = StyleSheet.create({
   modelBubble: { backgroundColor: theme.modelBubble, borderWidth: 1, borderColor: theme.border },
   userText: { color: "#ffffff", fontSize: 15, lineHeight: 21 },
   mdImage: { width: "100%", height: 220, marginVertical: 8, borderRadius: 10 },
+  notice: {
+    alignSelf: "center",
+    maxWidth: "92%",
+    backgroundColor: theme.surfaceAlt,
+    borderWidth: 1,
+    borderColor: theme.accent,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginVertical: 6,
+  },
+  noticeText: { color: theme.accent, fontSize: 13, textAlign: "center", lineHeight: 19 },
   statusRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 6, gap: 8 },
   statusText: { color: theme.textDim, fontSize: 13, fontStyle: "italic", flex: 1 },
   inputBar: {
@@ -292,6 +386,20 @@ const styles = StyleSheet.create({
   sendBtn: { backgroundColor: theme.accent, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 12, justifyContent: "center" },
   sendBtnDisabled: { opacity: 0.45 },
   sendText: { color: theme.bg, fontWeight: "700", fontSize: 15 },
+  speakBtn: { alignSelf: "flex-start", marginTop: 6 },
+  speakText: { color: theme.textDim, fontSize: 12, fontWeight: "600" },
+  micBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.surfaceAlt,
+    borderWidth: 1,
+    borderColor: theme.border,
+  },
+  micActive: { backgroundColor: theme.danger, borderColor: theme.danger },
+  micText: { color: theme.text, fontSize: 18 },
 });
 
 // Dark-theme markdown styling for model replies.

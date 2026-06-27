@@ -8,6 +8,7 @@ import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -17,9 +18,30 @@ import {
   View,
 } from "react-native";
 
-import { getGeminiKey, loadSecrets, normalizeSecretName, saveAll, NamedSecret } from "../storage/SecureStorage";
+import {
+  getGeminiKey,
+  getJinaKey,
+  getModel,
+  getSystemPrompt,
+  loadSecrets,
+  normalizeSecretName,
+  saveAll,
+  saveJinaKey,
+  saveModel,
+  saveSystemPrompt,
+  NamedSecret,
+} from "../storage/SecureStorage";
 import { clearErrors, listErrorsByThread, ErrorGroup } from "../storage/ErrorLogStore";
+import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, MODEL_PRESETS, listModels } from "../agent/GeminiAgent";
 import { theme } from "../theme";
+
+function Link({ label, url }: { label: string; url: string }) {
+  return (
+    <TouchableOpacity onPress={() => Linking.openURL(url)}>
+      <Text style={styles.link}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
 
 function when(ts: number): string {
   const d = new Date(ts);
@@ -28,6 +50,9 @@ function when(ts: number): string {
 
 export default function SettingsScreen() {
   const [geminiKey, setGeminiKey] = useState("");
+  const [jinaKey, setJinaKey] = useState("");
+  const [model, setModel] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
   const [secrets, setSecrets] = useState<NamedSecret[]>([]);
   const [newName, setNewName] = useState("");
   const [newValue, setNewValue] = useState("");
@@ -36,13 +61,20 @@ export default function SettingsScreen() {
   const [status, setStatus] = useState<string | null>(null);
   const [errorGroups, setErrorGroups] = useState<ErrorGroup[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Live model list from Google (null = loading/failed -> use presets).
+  const [models, setModels] = useState<string[] | null>(null);
 
   useEffect(() => {
     (async () => {
       setGeminiKey(await getGeminiKey());
+      setJinaKey(await getJinaKey());
+      setModel(await getModel());
+      setSystemPrompt(await getSystemPrompt());
       setSecrets(await loadSecrets());
       setErrorGroups(await listErrorsByThread());
       setLoading(false);
+      // Best-effort: pull the live model list from Google (needs the key).
+      setModels(await listModels());
     })();
   }, []);
 
@@ -76,6 +108,9 @@ export default function SettingsScreen() {
     setStatus(null);
     try {
       await saveAll(geminiKey, secrets);
+      await saveJinaKey(jinaKey);
+      await saveModel(model);
+      await saveSystemPrompt(systemPrompt);
       setStatus("Saved securely on this device.");
     } catch (err) {
       setStatus(`Save failed: ${String(err)}`);
@@ -102,7 +137,7 @@ export default function SettingsScreen() {
         </Text>
 
         <Text style={styles.sectionLabel}>Gemini API key</Text>
-        <Text style={styles.hint}>From Google AI Studio. Required to talk to the model.</Text>
+        <Text style={styles.hint}>Required to talk to the model.</Text>
         <TextInput
           style={styles.input}
           value={geminiKey}
@@ -113,6 +148,55 @@ export default function SettingsScreen() {
           autoCorrect={false}
           secureTextEntry
         />
+        <Link label="Get a free Gemini key →" url="https://aistudio.google.com/apikey" />
+
+        <Text style={styles.sectionLabel}>Model</Text>
+        <Text style={styles.hint}>
+          {models === null
+            ? "Loading available models from Google…"
+            : models.length
+            ? "Live list from your Google account. Tap one, or type a custom id."
+            : "Couldn't fetch the live list — showing common models. Save a valid Gemini key to load the rest."}
+        </Text>
+        <View style={styles.chips}>
+          {(models && models.length ? models : MODEL_PRESETS).map((m) => {
+            const active = (model || DEFAULT_MODEL) === m;
+            return (
+              <TouchableOpacity
+                key={m}
+                style={[styles.chip, active && styles.chipActive]}
+                onPress={() => setModel(m)}
+              >
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>{m}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        <TextInput
+          style={styles.input}
+          value={model}
+          onChangeText={setModel}
+          placeholder={`custom model id (default ${DEFAULT_MODEL})`}
+          placeholderTextColor={theme.textDim}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+
+        <Text style={styles.sectionLabel}>Jina key (optional)</Text>
+        <Text style={styles.hint}>
+          Powers web search + reading pages. Works without a key; adding a free key raises the rate limits.
+        </Text>
+        <TextInput
+          style={styles.input}
+          value={jinaKey}
+          onChangeText={setJinaKey}
+          placeholder="not set"
+          placeholderTextColor={theme.textDim}
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+        />
+        <Link label="Get a free Jina key →" url="https://jina.ai/api-dashboard/" />
 
         <Text style={styles.sectionLabel}>Your API secrets</Text>
         <Text style={styles.hint}>
@@ -169,6 +253,20 @@ export default function SettingsScreen() {
             <Text style={styles.addText}>+ Add secret</Text>
           </TouchableOpacity>
         </View>
+
+        <Text style={styles.sectionLabel}>Agent instructions</Text>
+        <Text style={styles.hint}>
+          The system prompt that governs how the assistant behaves. Leave blank to use the built-in default.
+        </Text>
+        <TextInput
+          style={[styles.input, styles.promptInput]}
+          value={systemPrompt}
+          onChangeText={setSystemPrompt}
+          placeholder={DEFAULT_SYSTEM_PROMPT}
+          placeholderTextColor={theme.textDim}
+          multiline
+          autoCorrect={false}
+        />
 
         <TouchableOpacity style={[styles.saveBtn, saving && styles.disabled]} onPress={onSave} disabled={saving}>
           {saving ? <ActivityIndicator color={theme.bg} /> : <Text style={styles.saveText}>Save</Text>}
@@ -253,6 +351,20 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   empty: { color: theme.textDim, fontStyle: "italic", marginVertical: 8 },
+  link: { color: theme.accent, fontSize: 13, fontWeight: "600", marginTop: 2, marginBottom: 4 },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8 },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: theme.border,
+    backgroundColor: theme.surface,
+  },
+  chipActive: { borderColor: theme.accent, backgroundColor: theme.surfaceAlt },
+  chipText: { color: theme.textDim, fontSize: 13 },
+  chipTextActive: { color: theme.accent, fontWeight: "700" },
+  promptInput: { minHeight: 120, textAlignVertical: "top" },
   secretRow: { flexDirection: "row", alignItems: "flex-start", marginBottom: 10, gap: 8 },
   secretCol: { flex: 1 },
   secretName: { color: theme.accent, fontSize: 13, fontWeight: "700", marginBottom: 4, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },

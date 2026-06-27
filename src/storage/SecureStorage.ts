@@ -9,6 +9,14 @@ import * as SecureStore from "expo-secure-store";
 
 // Fixed key for the Gemini API key (needed to call the model itself).
 const GEMINI_KEY = "GEMINI_API_KEY";
+// Optional Jina key — powers web search + the JS-rendering reader. The app works
+// keyless; a free key just raises rate limits. A first-class "function" key,
+// like the Gemini one (not a user-defined secret).
+const JINA_KEY = "JINA_API_KEY";
+// Optional user override of the agent's system prompt (persona / behaviour).
+const SYSTEM_PROMPT_KEY = "SYSTEM_PROMPT";
+// Selected Gemini model id ("" means: use the built-in default).
+const MODEL_KEY = "GEMINI_MODEL";
 // Index of the user's custom secret names (JSON array of strings).
 const SECRET_INDEX = "SECRET_NAMES";
 // Each custom secret value is stored under this prefix + its name.
@@ -44,6 +52,42 @@ export async function saveGeminiKey(value: string): Promise<void> {
   const v = value.trim();
   if (v) await SecureStore.setItemAsync(GEMINI_KEY, v);
   else await SecureStore.deleteItemAsync(GEMINI_KEY);
+}
+
+// ---- Jina key (optional function key) ----
+
+export async function getJinaKey(): Promise<string> {
+  return (await SecureStore.getItemAsync(JINA_KEY)) ?? "";
+}
+
+export async function saveJinaKey(value: string): Promise<void> {
+  const v = value.trim();
+  if (v) await SecureStore.setItemAsync(JINA_KEY, v);
+  else await SecureStore.deleteItemAsync(JINA_KEY);
+}
+
+// ---- System prompt override ("" means: use the built-in default) ----
+
+export async function getSystemPrompt(): Promise<string> {
+  return (await SecureStore.getItemAsync(SYSTEM_PROMPT_KEY)) ?? "";
+}
+
+export async function saveSystemPrompt(value: string): Promise<void> {
+  const v = value.trim();
+  if (v) await SecureStore.setItemAsync(SYSTEM_PROMPT_KEY, v);
+  else await SecureStore.deleteItemAsync(SYSTEM_PROMPT_KEY);
+}
+
+// ---- Selected Gemini model ("" means: use the built-in default) ----
+
+export async function getModel(): Promise<string> {
+  return (await SecureStore.getItemAsync(MODEL_KEY)) ?? "";
+}
+
+export async function saveModel(value: string): Promise<void> {
+  const v = value.trim();
+  if (v) await SecureStore.setItemAsync(MODEL_KEY, v);
+  else await SecureStore.deleteItemAsync(MODEL_KEY);
 }
 
 // ---- Custom named secrets ----

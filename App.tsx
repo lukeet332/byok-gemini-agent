@@ -3,14 +3,17 @@
 // with state. The bottom bar toggles Chats vs. Settings; opening/creating a
 // thread pushes the chat view (with a back button to the list).
 
-import React, { useState } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
+import AnimatedSplash from "./src/screens/AnimatedSplash";
 import ChatScreen from "./src/screens/ChatScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
+import SetupScreen from "./src/screens/SetupScreen";
 import ThreadListScreen from "./src/screens/ThreadListScreen";
+import { getGeminiKey } from "./src/storage/SecureStorage";
 import { theme } from "./src/theme";
 
 type View_ = "list" | "chat" | "settings";
@@ -23,6 +26,13 @@ export default function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   // Bumped whenever a thread changes so the list reloads when shown again.
   const [, setListVersion] = useState(0);
+  // null = still checking; false = needs setup; true = ready.
+  const [ready, setReady] = useState<boolean | null>(null);
+  const [splashDone, setSplashDone] = useState(false);
+
+  useEffect(() => {
+    getGeminiKey().then((k) => setReady(!!k));
+  }, []);
 
   function openThread(id: string) {
     setActiveThreadId(id);
@@ -34,9 +44,21 @@ export default function App() {
 
   const onChats = view === "list" || view === "chat";
 
-  return (
-    <SafeAreaProvider>
-      <StatusBar style="light" />
+  let body: React.ReactNode;
+  if (ready === null) {
+    body = (
+      <View style={[styles.root, styles.center]}>
+        <ActivityIndicator color={theme.accent} />
+      </View>
+    );
+  } else if (!ready) {
+    body = (
+      <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
+        <SetupScreen onDone={() => setReady(true)} />
+      </SafeAreaView>
+    );
+  } else {
+    body = (
       <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
         {view === "chat" ? (
           <View style={styles.chatHeader}>
@@ -50,7 +72,11 @@ export default function App() {
           {view === "list" ? (
             <ThreadListScreen onOpen={openThread} onNew={newChat} />
           ) : view === "chat" && activeThreadId ? (
-            <ChatScreen threadId={activeThreadId} onThreadChanged={() => setListVersion((v) => v + 1)} />
+            <ChatScreen
+              threadId={activeThreadId}
+              onThreadChanged={() => setListVersion((v) => v + 1)}
+              onOpenSettings={() => setView("settings")}
+            />
           ) : (
             <SettingsScreen />
           )}
@@ -61,6 +87,14 @@ export default function App() {
           <TabButton label="Settings" active={view === "settings"} onPress={() => setView("settings")} />
         </View>
       </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaProvider>
+      <StatusBar style="light" />
+      {body}
+      {!splashDone ? <AnimatedSplash onFinish={() => setSplashDone(true)} /> : null}
     </SafeAreaProvider>
   );
 }
@@ -76,6 +110,7 @@ function TabButton({ label, active, onPress }: { label: string; active: boolean;
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
+  center: { alignItems: "center", justifyContent: "center" },
   screen: { flex: 1 },
   chatHeader: {
     flexDirection: "row",
