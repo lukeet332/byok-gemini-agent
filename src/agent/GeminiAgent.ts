@@ -698,9 +698,25 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
       ? `\n\nDense memory of earlier conversation (your own notes, may be terse):\n${memo.trim()}`
       : "";
 
-  const shellLine = (await getShellEnabled().catch(() => false))
-    ? "\n\nShell execution is ENABLED: you can run_shell(command, privilege?) on the device. privilege is 'app' (default sandbox), 'shizuku' (ADB/shell-uid without root — pm/cmd/settings/input-am automation, if the user set up Shizuku), or 'root' (su, rooted only). Use it to inspect the device, run scripts, automate other apps, and — where toolchains are installed — build and TEST code then read the output and fix failures (the compile→run→fix loop). Prefer the lowest privilege that works; escalate only when needed. Every command is confirmed by the user."
-    : "";
+  let shellLine = "";
+  if (await getShellEnabled().catch(() => false)) {
+    let avail =
+      "Shell execution is ENABLED: run_shell(command, privilege?) where privilege = 'app' (sandbox, default), 'shizuku' (ADB/shell-uid, no root), or 'root' (su, rooted only).";
+    try {
+      const z = await Shell.shizukuStatus();
+      avail += z.granted
+        ? " Shizuku is CONNECTED right now — privilege:'shizuku' works: pm grant / appops (grant yourself permissions), am + input (automate other apps' UI), settings put, screencap (then look at the image), dumpsys, and reading /sdcard freely."
+        : z.running
+          ? " Shizuku is running but NOT granted yet — tell the user to grant it in Settings → Advanced mode before using privilege:'shizuku'."
+          : " Shizuku is NOT running — only privilege:'app' (toybox coreutils: ls, grep, cat, ps, getprop…) works, unless the device is rooted (privilege:'root').";
+    } catch {
+      // status unavailable — leave the generic guidance
+    }
+    avail +=
+      " Use it to inspect the device, run scripts, automate apps, and (where toolchains exist) build+TEST code then fix failures. Prefer the lowest privilege that works. IMPORTANT: 'shizuku' and 'root' commands ALWAYS ask the user to confirm (even in Auto mode) — do NOT assume silent execution; explain what each command does. Examples: screenshot = run_shell('screencap -p /sdcard/s.png', 'shizuku'); grant a permission = run_shell('pm grant " +
+      "com.lukeet332.byokgeminiagent android.permission.PACKAGE_USAGE_STATS', 'shizuku').";
+    shellLine = "\n\n" + avail;
+  }
 
   const mcp = McpClient.connectedSummary();
   const mcpLine = mcp

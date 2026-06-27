@@ -33,7 +33,7 @@ import {
 
 import { AbortedError, compactConversation, runAgentTurn } from "../agent/GeminiAgent";
 import { notifyTurnDone } from "../agent/Background";
-import { getBackgroundRun } from "../storage/SecureStorage";
+import { getBackgroundRun, getConfirmSystemActions } from "../storage/SecureStorage";
 import McpServersModal from "./McpServersModal";
 import {
   COMPACT_THRESHOLD_CHARS,
@@ -206,6 +206,8 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   // Background execution: when enabled, let the turn keep running when the app
   // is backgrounded (instead of aborting it) and notify on completion.
   const backgroundRunRef = useRef(true);
+  // Always confirm Shizuku/root commands, even in Auto mode (safety rail).
+  const confirmSystemRef = useRef(true);
   // Last turn left a user message unanswered (interrupted) → offer to continue.
   const [needsResume, setNeedsResume] = useState(false);
   // True when the pending message was dictated (so we read the reply aloud).
@@ -229,6 +231,9 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   useEffect(() => {
     getBackgroundRun().then((v) => {
       backgroundRunRef.current = v;
+    });
+    getConfirmSystemActions().then((v) => {
+      confirmSystemRef.current = v;
     });
   }, []);
 
@@ -259,7 +264,11 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   }, []);
 
   function confirmWrite({ method, url }: { method: string; url: string }): Promise<boolean> {
-    if (autoModeRef.current) return Promise.resolve(true); // auto mode: no popups
+    // System-level shell (Shizuku/root) always confirms when that rail is on —
+    // even in Auto mode. Everything else: Auto mode bypasses the popup.
+    const isSystemAction = method === "SHELL" && /^\[(shizuku|root)\]/.test(url);
+    const mustConfirm = isSystemAction && confirmSystemRef.current;
+    if (autoModeRef.current && !mustConfirm) return Promise.resolve(true);
     const body =
       method === "INTENT"
         ? `The assistant wants to hand off to another app:\n\n${url}\n\nAllow it?`

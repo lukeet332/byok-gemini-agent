@@ -23,6 +23,7 @@ import {
 import {
   getAnthropicConfig,
   getBackgroundRun,
+  getConfirmSystemActions,
   getGeminiKey,
   getGithubToken,
   getShellEnabled,
@@ -36,6 +37,7 @@ import {
   saveAll,
   saveAnthropicConfig,
   saveBackgroundRun,
+  saveConfirmSystemActions,
   saveGithubToken,
   saveShellEnabled,
   saveModel,
@@ -109,6 +111,7 @@ export default function SettingsScreen() {
   const [openaiModel, setOpenaiModel] = useState("");
   const [backgroundRun, setBackgroundRunState] = useState(true);
   const [shellEnabled, setShellEnabledState] = useState(false);
+  const [confirmSystem, setConfirmSystemState] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -124,6 +127,7 @@ export default function SettingsScreen() {
       setAnthropicModel(an.model);
       setBackgroundRunState(await getBackgroundRun());
       setShellEnabledState(await getShellEnabled());
+      setConfirmSystemState(await getConfirmSystemActions());
       setShizuku(await shizukuStatus());
       setGithubToken(await getGithubToken());
       setWriteMode(await getWriteMode());
@@ -179,6 +183,7 @@ export default function SettingsScreen() {
       await saveAnthropicConfig({ apiKey: anthropicKey, model: anthropicModel });
       await saveBackgroundRun(backgroundRun);
       await saveShellEnabled(shellEnabled);
+      await saveConfirmSystemActions(confirmSystem);
       await saveGithubToken(githubToken);
       await saveWriteMode(writeMode);
       await saveSystemPrompt(systemPrompt);
@@ -446,69 +451,6 @@ export default function SettingsScreen() {
           />
         </View>
 
-        <TouchableOpacity style={styles.accordionHead} onPress={() => setAdvancedOpen((o) => !o)}>
-          <Text style={styles.sectionLabel}>Advanced mode</Text>
-          <Text style={styles.accordionChevron}>{advancedOpen ? "▾" : "▸"}</Text>
-        </TouchableOpacity>
-        {advancedOpen ? (
-          <>
-            <Text style={styles.hint}>
-              Turn Fraude into a local coding agent — let it run shell commands and set up real programming
-              tools on this device, via Shizuku (no root) or root. Powerful and risky; for advanced users.
-            </Text>
-
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextWrap}>
-                <Text style={styles.toggleName}>Shell execution</Text>
-                <Text style={styles.hint}>
-                  Gives the AI a run_shell tool. Runs in the app sandbox by default; can escalate to Shizuku or
-                  root. Every command asks you to confirm first.
-                </Text>
-              </View>
-              <Switch
-                value={shellEnabled}
-                onValueChange={setShellEnabledState}
-                trackColor={{ false: theme.border, true: theme.accent }}
-                thumbColor={theme.text}
-              />
-            </View>
-
-            <Text style={styles.smallLabel}>Shizuku — shell access without root</Text>
-            <Text style={styles.hint}>
-              Shizuku grants ADB-level (shell-uid) privileges to apps without rooting — enough to run
-              pm/cmd/settings, automate other apps, and grant Fraude extra permissions. Install it, start it
-              once via Wireless Debugging, then grant access here.{"\n"}Status:{" "}
-              {shizuku.running ? (shizuku.granted ? "connected ✓" : "running — needs permission") : "not running"}.
-            </Text>
-            <Link label="How to set up Shizuku →" url="https://shizuku.rikka.app/guide/setup/" />
-            <View style={styles.advButtons}>
-              <TouchableOpacity style={styles.advBtn} onPress={refreshShizuku}>
-                <Text style={styles.advBtnText}>Refresh status</Text>
-              </TouchableOpacity>
-              {shizuku.running && !shizuku.granted ? (
-                <TouchableOpacity style={styles.advBtn} onPress={grantShizuku}>
-                  <Text style={styles.advBtnText}>Grant Shizuku access</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-
-            <Text style={styles.smallLabel}>Root</Text>
-            <Text style={styles.hint}>
-              If your device is rooted, the AI can run commands as root (su) — confirmed each time, no extra
-              setup beyond a working su. Root also allows installing Fraude as a privileged system app (very
-              advanced, device-specific) — ask the assistant to walk you through it.
-            </Text>
-
-            <Text style={styles.smallLabel}>Local programming tools</Text>
-            <Text style={styles.hint}>
-              Android ships toybox (ls, grep, cat, ps…) but no compilers. For a full local toolchain (python,
-              node, clang, git…), install Termux + its packages — then, with shell execution on, just ask
-              Fraude to set up or run your project and it'll drive the steps via run_shell.
-            </Text>
-            <Link label="Get Termux (F-Droid) →" url="https://f-droid.org/packages/com.termux/" />
-          </>
-        ) : null}
-
         <Text style={styles.sectionLabel}>GitHub (coding)</Text>
         <Text style={styles.hint}>
           A Personal Access Token lets the assistant read repos and commit changes. Fine-grained, scoped to
@@ -668,6 +610,87 @@ export default function SettingsScreen() {
           {saving ? <ActivityIndicator color={theme.bg} /> : <Text style={styles.saveText}>Save</Text>}
         </TouchableOpacity>
         {status ? <Text style={styles.saved}>{status}</Text> : null}
+
+        <TouchableOpacity style={styles.accordionHead} onPress={() => setAdvancedOpen((o) => !o)}>
+          <Text style={styles.sectionLabel}>Advanced mode</Text>
+          <Text style={styles.accordionChevron}>{advancedOpen ? "▾" : "▸"}</Text>
+        </TouchableOpacity>
+        {advancedOpen ? (
+          <>
+            <Text style={styles.hint}>
+              Turn Fraude into a local coding agent — let it run shell commands and set up real programming
+              tools on this device, via Shizuku (no root) or root. Powerful and risky; for advanced users.
+            </Text>
+
+            <View style={styles.toggleRow}>
+              <View style={styles.toggleTextWrap}>
+                <Text style={styles.toggleName}>Shell execution</Text>
+                <Text style={styles.hint}>
+                  Gives the AI a run_shell tool. Runs in the app sandbox by default; can escalate to Shizuku or
+                  root. Every command asks you to confirm first.
+                </Text>
+              </View>
+              <Switch
+                value={shellEnabled}
+                onValueChange={setShellEnabledState}
+                trackColor={{ false: theme.border, true: theme.accent }}
+                thumbColor={theme.text}
+              />
+            </View>
+
+            <View style={styles.toggleRow}>
+              <View style={styles.toggleTextWrap}>
+                <Text style={styles.toggleName}>Always confirm system actions</Text>
+                <Text style={styles.hint}>
+                  Make Shizuku & root commands ask for confirmation every time — even when Auto mode is on.
+                  Strongly recommended; these run with elevated privileges.
+                </Text>
+              </View>
+              <Switch
+                value={confirmSystem}
+                onValueChange={setConfirmSystemState}
+                trackColor={{ false: theme.border, true: theme.accent }}
+                thumbColor={theme.text}
+              />
+            </View>
+
+            <Text style={styles.smallLabel}>Shizuku — shell access without root</Text>
+            <Text style={styles.hint}>
+              Shizuku grants ADB-level (shell-uid) privileges to apps without rooting — enough to run
+              pm/cmd/settings, automate other apps, and grant Fraude extra permissions. Install it, start it
+              once via Wireless Debugging, then grant access here.{"\n"}Status:{" "}
+              {shizuku.running ? (shizuku.granted ? "connected ✓" : "running — needs permission") : "not running"}.
+            </Text>
+            <Link label="How to set up Shizuku →" url="https://shizuku.rikka.app/guide/setup/" />
+            <View style={styles.advButtons}>
+              <TouchableOpacity style={styles.advBtn} onPress={refreshShizuku}>
+                <Text style={styles.advBtnText}>Refresh status</Text>
+              </TouchableOpacity>
+              {shizuku.running && !shizuku.granted ? (
+                <TouchableOpacity style={styles.advBtn} onPress={grantShizuku}>
+                  <Text style={styles.advBtnText}>Grant Shizuku access</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            <Text style={styles.smallLabel}>Root</Text>
+            <Text style={styles.hint}>
+              If your device is rooted, the AI can run commands as root (su) — confirmed each time, no extra
+              setup beyond a working su. Root also allows installing Fraude as a privileged system app (very
+              advanced, device-specific) — ask the assistant to walk you through it.
+            </Text>
+
+            <Text style={styles.smallLabel}>Local programming tools (Termux)</Text>
+            <Text style={styles.hint}>
+              Android ships toybox (ls, grep, cat, ps…) but no compilers. Install Termux + the Termux:API
+              add-on for a full local toolchain (python, node, clang, git…). Once both are installed and shell
+              execution is on, ask Fraude to set up or run your project and it drives the steps via run_shell /
+              Termux.
+            </Text>
+            <Link label="Get Termux (F-Droid) →" url="https://f-droid.org/packages/com.termux/" />
+            <Link label="Get Termux:API (F-Droid) →" url="https://f-droid.org/packages/com.termux.api/" />
+          </>
+        ) : null}
 
         <View style={styles.logHeader}>
           <Text style={styles.sectionLabel}>Error logs</Text>

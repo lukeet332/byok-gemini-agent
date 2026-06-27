@@ -39,6 +39,9 @@ const BACKGROUND_KEY = "BACKGROUND_RUN";
 // Allow the AI to run shell commands on-device (advanced; off by default).
 // "1" = on, anything else (incl. unset) = off. Powerful — gated + confirmed.
 const SHELL_KEY = "SHELL_EXEC";
+// Always confirm system-level actions (Shizuku/root shell) even in Auto mode.
+// "" / "1" = on (default), "0" = off. Safety rail for elevated commands.
+const CONFIRM_SYSTEM_KEY = "CONFIRM_SYSTEM";
 // How the AI's code changes land: "pr" (branch+PR), "branch", or "main".
 const WRITE_MODE_KEY = "GIT_WRITE_MODE";
 export type GitWriteMode = "pr" | "branch" | "main";
@@ -222,6 +225,15 @@ export async function getShellEnabled(): Promise<boolean> {
 
 export async function saveShellEnabled(on: boolean): Promise<void> {
   await SecureStore.setItemAsync(SHELL_KEY, on ? "1" : "0");
+}
+
+// Always confirm Shizuku/root commands even in Auto mode (default: on).
+export async function getConfirmSystemActions(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(CONFIRM_SYSTEM_KEY)) !== "0";
+}
+
+export async function saveConfirmSystemActions(on: boolean): Promise<void> {
+  await SecureStore.setItemAsync(CONFIRM_SYSTEM_KEY, on ? "1" : "0");
 }
 
 // ---- Git write mode (default: branch + PR) ----
