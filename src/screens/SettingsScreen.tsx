@@ -35,6 +35,7 @@ import {
   NamedSecret,
 } from "../storage/SecureStorage";
 import { clearErrors, listErrorsByThread, ErrorGroup } from "../storage/ErrorLogStore";
+import { getUserNotes, saveUserNotes } from "../storage/UserNotes";
 import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, MODEL_PRESETS, listModels } from "../agent/GeminiAgent";
 import McpServersModal from "./McpServersModal";
 import { theme } from "../theme";
@@ -67,6 +68,9 @@ export default function SettingsScreen() {
   const [errorGroups, setErrorGroups] = useState<ErrorGroup[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [mcpVisible, setMcpVisible] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [userNotes, setUserNotes] = useState("");
   // Live model list from Google (null = loading/failed -> use presets).
   const [models, setModels] = useState<string[] | null>(null);
 
@@ -77,6 +81,7 @@ export default function SettingsScreen() {
       setGithubToken(await getGithubToken());
       setWriteMode(await getWriteMode());
       setSystemPrompt(await getSystemPrompt());
+      setUserNotes(await getUserNotes());
       setSecrets(await loadSecrets());
       setErrorGroups(await listErrorsByThread());
       setLoading(false);
@@ -119,6 +124,7 @@ export default function SettingsScreen() {
       await saveGithubToken(githubToken);
       await saveWriteMode(writeMode);
       await saveSystemPrompt(systemPrompt);
+      await saveUserNotes(userNotes);
       setStatus("Saved securely on this device.");
     } catch (err) {
       setStatus(`Save failed: ${String(err)}`);
@@ -288,19 +294,62 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.sectionLabel}>Agent instructions</Text>
-        <Text style={styles.hint}>
-          The system prompt that governs how the assistant behaves. Leave blank to use the built-in default.
-        </Text>
-        <TextInput
-          style={[styles.input, styles.promptInput]}
-          value={systemPrompt}
-          onChangeText={setSystemPrompt}
-          placeholder={DEFAULT_SYSTEM_PROMPT}
-          placeholderTextColor={theme.textDim}
-          multiline
-          autoCorrect={false}
-        />
+        <TouchableOpacity style={styles.accordionHead} onPress={() => setPromptOpen((o) => !o)}>
+          <Text style={styles.sectionLabel}>Agent instructions</Text>
+          <Text style={styles.accordionChevron}>{promptOpen ? "▾" : "▸"}</Text>
+        </TouchableOpacity>
+        {promptOpen ? (
+          <>
+            <Text style={styles.hint}>
+              The system prompt that governs how the assistant behaves. Blank = the built-in default
+              (shown greyed below). Edit to customise.
+            </Text>
+            <TextInput
+              style={[styles.input, styles.promptInput]}
+              value={systemPrompt}
+              onChangeText={setSystemPrompt}
+              placeholder={DEFAULT_SYSTEM_PROMPT}
+              placeholderTextColor={theme.textDim}
+              multiline
+              autoCorrect={false}
+            />
+            <View style={styles.promptActions}>
+              <TouchableOpacity onPress={() => setSystemPrompt(DEFAULT_SYSTEM_PROMPT)}>
+                <Text style={styles.promptAction}>Load default to edit</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setSystemPrompt("")} disabled={!systemPrompt}>
+                <Text style={[styles.promptAction, !systemPrompt && styles.promptActionOff]}>Reset to default</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : null}
+
+        <TouchableOpacity style={styles.accordionHead} onPress={() => setNotesOpen((o) => !o)}>
+          <Text style={styles.sectionLabel}>Your preferences (AI memory)</Text>
+          <Text style={styles.accordionChevron}>{notesOpen ? "▾" : "▸"}</Text>
+        </TouchableOpacity>
+        {notesOpen ? (
+          <>
+            <Text style={styles.hint}>
+              A personal notes file the assistant reads every chat and updates as it learns your
+              preferences. You can edit it directly here.
+            </Text>
+            <TextInput
+              style={[styles.input, styles.promptInput]}
+              value={userNotes}
+              onChangeText={setUserNotes}
+              placeholder="e.g. Prefers concise answers. Based in the UK. Codes in TypeScript."
+              placeholderTextColor={theme.textDim}
+              multiline
+              autoCorrect={false}
+            />
+            <View style={styles.promptActions}>
+              <TouchableOpacity onPress={() => setUserNotes("")} disabled={!userNotes}>
+                <Text style={[styles.promptAction, !userNotes && styles.promptActionOff]}>Clear</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : null}
 
         <TouchableOpacity style={[styles.saveBtn, saving && styles.disabled]} onPress={onSave} disabled={saving}>
           {saving ? <ActivityIndicator color={theme.bg} /> : <Text style={styles.saveText}>Save</Text>}
@@ -401,6 +450,11 @@ const styles = StyleSheet.create({
   chipText: { color: theme.textDim, fontSize: 13 },
   chipTextActive: { color: theme.accent, fontWeight: "700" },
   promptInput: { minHeight: 120, textAlignVertical: "top" },
+  accordionHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 14 },
+  accordionChevron: { color: theme.textDim, fontSize: 16, marginTop: 14 },
+  promptActions: { flexDirection: "row", justifyContent: "flex-end", gap: 20, marginTop: 8 },
+  promptAction: { color: theme.accent, fontWeight: "700", fontSize: 13 },
+  promptActionOff: { opacity: 0.4 },
   secretRow: { flexDirection: "row", alignItems: "flex-start", marginBottom: 10, gap: 8 },
   secretCol: { flex: 1 },
   secretName: { color: theme.accent, fontSize: 13, fontWeight: "700", marginBottom: 4, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },

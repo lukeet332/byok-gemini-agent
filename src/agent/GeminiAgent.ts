@@ -12,6 +12,7 @@ import { fetch as expoFetch } from "expo/fetch";
 import { Content, FunctionCall, Part, Tool } from "../types";
 import { getGeminiKey, getGithubToken, getModel, getSecretValue, getSystemPrompt, listSecretNames } from "../storage/SecureStorage";
 import { appendError } from "../storage/ErrorLogStore";
+import { getUserNotes, saveUserNotes } from "../storage/UserNotes";
 import { BrowserEngine } from "../browser/BrowserEngine";
 import * as Device from "../device/DeviceTools";
 import * as Files from "../device/FileTools";
@@ -102,6 +103,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "- If a tool fails, read the error, adjust (different URL, headers, or query) and retry a couple of times before giving up.",
   "- BE HONEST — NEVER GUESS OR LIE. Do not fabricate success, data, results, prices, quotes, or sources. If, after genuinely using your tools, you still cannot verify a fact or complete an action (a site blocks access, an app can't be driven silently, a file is binary), say so plainly — a truthful 'I searched but couldn't confirm X' or 'I couldn't do X because Y' is ALWAYS better than a confident made-up answer.",
   "- For app handoffs prefer standard intents/deep links: ACTION_SENDTO (smsto:/mailto:), ACTION_SEND, ACTION_INSERT (calendar/contacts), ACTION_VIEW, ACTION_DIAL. Remember these open the target app; truly background actions are only possible via an API (http_request).",
+  "- REMEMBER LASTING PREFERENCES. If the user asks you to always do something — a tone/voice (formal, casual, blunt), length (brief), format, language, or any standing instruction or fact to remember — immediately save it with update_user_notes so it persists across all future chats. Don't save one-off requests.",
   "- Be concise and direct. Use markdown. Include relevant image URLs so they render inline.",
 ].join("\n");
 
@@ -290,6 +292,19 @@ export const TOOLS: Tool[] = [
         },
       },
       {
+        name: "update_user_notes",
+        description:
+          "Save/update your durable notes about THIS user — their chat preferences, " +
+          "style, recurring context, things to remember across chats. You are given the " +
+          "current notes each turn; pass the FULL updated markdown (you curate it: merge, " +
+          "dedupe, keep it concise). Use when you learn a lasting preference.",
+        parameters: {
+          type: "object",
+          properties: { notes: { type: "string", description: "The full updated notes (markdown)." } },
+          required: ["notes"],
+        },
+      },
+      {
         name: "github_list_path",
         description:
           "List a directory in a GitHub repo (or report a path is a file) to navigate a codebase. repo is 'owner/name'.",
@@ -414,6 +429,10 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
       String(args.content ?? ""),
       typeof args.mimeType === "string" ? args.mimeType : undefined
     ),
+  update_user_notes: async (args) => {
+    await saveUserNotes(String(args.notes ?? ""));
+    return { ok: true };
+  },
   github_list_path: (args) =>
     Github.listPath(String(args.repo ?? ""), typeof args.path === "string" ? args.path : "", typeof args.ref === "string" ? args.ref : undefined),
   github_get_file: (args) =>
@@ -563,7 +582,12 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
     ? `\n\nConnected MCP integrations — their tools are available to you (named mcp__<server>__<tool>); USE them whenever the request relates to that service: ${mcp}.`
     : "";
 
-  return { role: "user", parts: [{ text: base + secretsLine + mcpLine + memoBlock }] };
+  const notes = (await getUserNotes()).trim();
+  const notesBlock = notes
+    ? `\n\nWhat you know about this user (their notes/preferences — honour them; update via update_user_notes when you learn something durable):\n${notes}`
+    : `\n\nYou have no saved notes about this user yet. When you learn a durable preference, save it with update_user_notes.`;
+
+  return { role: "user", parts: [{ text: base + secretsLine + mcpLine + notesBlock + memoBlock }] };
 }
 
 // Single attempt — NO auto-retry. Retrying burns more of the same quota; the UI
@@ -778,6 +802,7 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "read_file") return "Reading file...";
   if (call.name === "pick_file") return "Waiting for file pick...";
   if (call.name === "write_file" || call.name === "create_file") return "Writing file...";
+  if (call.name === "update_user_notes") return "Updating your notes...";
   if (call.name === "github_list_path" || call.name === "github_get_file") return `Reading repo: ${String(call.args?.repo ?? "")}`;
   if (call.name === "github_search_code") return "Searching code...";
   if (call.name === "github_commit") return `Committing to ${String(call.args?.repo ?? "")}...`;
