@@ -22,11 +22,13 @@ import * as McpClient from "../mcp/McpClient";
 // Default model + the presets offered in Settings. Users can also type any
 // model id (e.g. a newer one) as a custom value.
 export const DEFAULT_MODEL = "gemini-2.5-flash";
-export const MODEL_PRESETS = [
-  "gemini-2.5-flash",
-  "gemini-2.5-pro",
-  "gemini-2.5-flash-lite",
-  "gemini-2.0-flash",
+// Scoped to the real tiers (like the Gemini app) + 2.5 Flash for its generous
+// free-tier limits. The -latest aliases track the current Flash/Pro/Lite.
+export const MODEL_PRESETS: { id: string; label: string }[] = [
+  { id: "gemini-2.5-flash", label: "2.5 Flash · generous free limits" },
+  { id: "gemini-flash-latest", label: "Flash · all-round help" },
+  { id: "gemini-flash-lite-latest", label: "Flash-Lite · fastest" },
+  { id: "gemini-pro-latest", label: "Pro · advanced maths & code" },
 ];
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
 

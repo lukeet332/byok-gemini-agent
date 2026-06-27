@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Linking,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -36,7 +37,7 @@ import {
 } from "../storage/SecureStorage";
 import { clearErrors, listErrorsByThread, ErrorGroup } from "../storage/ErrorLogStore";
 import { getUserNotes, saveUserNotes } from "../storage/UserNotes";
-import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, MODEL_PRESETS, listModels } from "../agent/GeminiAgent";
+import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, MODEL_PRESETS } from "../agent/GeminiAgent";
 import McpServersModal from "./McpServersModal";
 import { theme } from "../theme";
 
@@ -72,7 +73,8 @@ export default function SettingsScreen() {
   const [notesOpen, setNotesOpen] = useState(false);
   const [userNotes, setUserNotes] = useState("");
   // Live model list from Google (null = loading/failed -> use presets).
-  const [models, setModels] = useState<string[] | null>(null);
+  const [modelMenu, setModelMenu] = useState(false);
+  const [customModel, setCustomModel] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -85,8 +87,6 @@ export default function SettingsScreen() {
       setSecrets(await loadSecrets());
       setErrorGroups(await listErrorsByThread());
       setLoading(false);
-      // Best-effort: pull the live model list from Google (needs the key).
-      setModels(await listModels());
     })();
   }, []);
 
@@ -165,36 +165,62 @@ export default function SettingsScreen() {
         <Link label="Get a free Gemini key →" url="https://aistudio.google.com/apikey" />
 
         <Text style={styles.sectionLabel}>Model</Text>
-        <Text style={styles.hint}>
-          {models === null
-            ? "Loading available models from Google…"
-            : models.length
-            ? "Live list from your Google account. Tap one, or type a custom id."
-            : "Couldn't fetch the live list — showing common models. Save a valid Gemini key to load the rest."}
-        </Text>
-        <View style={styles.chips}>
-          {(models && models.length ? models : MODEL_PRESETS).map((m) => {
-            const active = (model || DEFAULT_MODEL) === m;
-            return (
+        <Text style={styles.hint}>Which Gemini model the agent uses.</Text>
+        {(() => {
+          const eff = model || DEFAULT_MODEL;
+          const preset = MODEL_PRESETS.find((p) => p.id === eff);
+          return (
+            <TouchableOpacity style={styles.dropdown} onPress={() => setModelMenu(true)}>
+              <Text style={styles.dropdownText}>{preset ? `${preset.id} — ${preset.label}` : eff}</Text>
+              <Text style={styles.dropdownChevron}>▾</Text>
+            </TouchableOpacity>
+          );
+        })()}
+        {customModel || (!!model && !MODEL_PRESETS.some((p) => p.id === model)) ? (
+          <TextInput
+            style={[styles.input, { marginTop: 8 }]}
+            value={model}
+            onChangeText={setModel}
+            placeholder={`custom model id (default ${DEFAULT_MODEL})`}
+            placeholderTextColor={theme.textDim}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        ) : null}
+
+        <Modal visible={modelMenu} transparent animationType="fade" onRequestClose={() => setModelMenu(false)}>
+          <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setModelMenu(false)}>
+            <View style={styles.modeCard}>
+              <Text style={styles.modeCardTitle}>Model</Text>
+              {MODEL_PRESETS.map((p) => (
+                <TouchableOpacity
+                  key={p.id}
+                  style={styles.modelRow}
+                  onPress={() => {
+                    setModel(p.id);
+                    setCustomModel(false);
+                    setModelMenu(false);
+                  }}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modelName}>{p.id}</Text>
+                    <Text style={styles.modelDesc}>{p.label}</Text>
+                  </View>
+                  {(model || DEFAULT_MODEL) === p.id ? <Text style={styles.modelCheck}>✓</Text> : null}
+                </TouchableOpacity>
+              ))}
               <TouchableOpacity
-                key={m}
-                style={[styles.chip, active && styles.chipActive]}
-                onPress={() => setModel(m)}
+                style={styles.modelRow}
+                onPress={() => {
+                  setCustomModel(true);
+                  setModelMenu(false);
+                }}
               >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{m}</Text>
+                <Text style={styles.modelName}>Custom…</Text>
               </TouchableOpacity>
-            );
-          })}
-        </View>
-        <TextInput
-          style={styles.input}
-          value={model}
-          onChangeText={setModel}
-          placeholder={`custom model id (default ${DEFAULT_MODEL})`}
-          placeholderTextColor={theme.textDim}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
+            </View>
+          </TouchableOpacity>
+        </Modal>
 
         <Text style={styles.sectionLabel}>GitHub (coding)</Text>
         <Text style={styles.hint}>
@@ -455,6 +481,26 @@ const styles = StyleSheet.create({
   promptActions: { flexDirection: "row", justifyContent: "flex-end", gap: 20, marginTop: 8 },
   promptAction: { color: theme.accent, fontWeight: "700", fontSize: 13 },
   promptActionOff: { opacity: 0.4 },
+  dropdown: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: theme.surface,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  dropdownText: { color: theme.text, fontSize: 15, flex: 1, marginRight: 8 },
+  dropdownChevron: { color: theme.textDim, fontSize: 14 },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 22 },
+  modeCard: { backgroundColor: theme.surface, borderRadius: 16, borderWidth: 1, borderColor: theme.border, padding: 12 },
+  modeCardTitle: { color: theme.textDim, fontSize: 13, fontWeight: "700", marginBottom: 6, marginLeft: 4, textTransform: "uppercase", letterSpacing: 1 },
+  modelRow: { flexDirection: "row", alignItems: "center", padding: 12, borderRadius: 10 },
+  modelName: { color: theme.text, fontSize: 15, fontWeight: "700" },
+  modelDesc: { color: theme.textDim, fontSize: 13, marginTop: 2 },
+  modelCheck: { color: theme.accent, fontSize: 18, fontWeight: "700", marginLeft: 10 },
   secretRow: { flexDirection: "row", alignItems: "flex-start", marginBottom: 10, gap: 8 },
   secretCol: { flex: 1 },
   secretName: { color: theme.accent, fontSize: 13, fontWeight: "700", marginBottom: 4, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
