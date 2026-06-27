@@ -2,6 +2,7 @@
   "expo": {
     "name": "Fraude",
     "slug": "byok-gemini-agent",
+    "scheme": "fraude",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",

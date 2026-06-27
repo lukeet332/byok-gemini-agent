@@ -36,6 +36,7 @@ import {
 } from "../storage/SecureStorage";
 import { clearErrors, listErrorsByThread, ErrorGroup } from "../storage/ErrorLogStore";
 import { DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, MODEL_PRESETS, listModels } from "../agent/GeminiAgent";
+import McpServersModal from "./McpServersModal";
 import { theme } from "../theme";
 
 function Link({ label, url }: { label: string; url: string }) {
@@ -65,6 +66,7 @@ export default function SettingsScreen() {
   const [status, setStatus] = useState<string | null>(null);
   const [errorGroups, setErrorGroups] = useState<ErrorGroup[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [mcpVisible, setMcpVisible] = useState(false);
   // Live model list from Google (null = loading/failed -> use presets).
   const [models, setModels] = useState<string[] | null>(null);
 
@@ -222,6 +224,14 @@ export default function SettingsScreen() {
           ))}
         </View>
 
+        <Text style={styles.sectionLabel}>MCP servers</Text>
+        <Text style={styles.hint}>
+          Connect remote MCP servers to give the assistant more tools. (Also available via /mcp in chat.)
+        </Text>
+        <TouchableOpacity style={styles.mcpBtn} onPress={() => setMcpVisible(true)}>
+          <Text style={styles.mcpBtnText}>Manage MCP servers</Text>
+        </TouchableOpacity>
+
         <Text style={styles.sectionLabel}>Your API secrets</Text>
         <Text style={styles.hint}>
           Add any API key/token. Reference it in chat as {"{{NAME}}"} (e.g. {"{{OPENAI_KEY}}"}) and the
@@ -352,6 +362,7 @@ export default function SettingsScreen() {
           })
         )}
       </ScrollView>
+      <McpServersModal visible={mcpVisible} onClose={() => setMcpVisible(false)} />
     </KeyboardAvoidingView>
   );
 }
@@ -418,6 +429,8 @@ const styles = StyleSheet.create({
   saveBtn: { backgroundColor: theme.accent, borderRadius: 12, paddingVertical: 15, alignItems: "center", marginTop: 18 },
   disabled: { opacity: 0.6 },
   saveText: { color: theme.bg, fontSize: 16, fontWeight: "700" },
+  mcpBtn: { borderWidth: 1, borderColor: theme.accent, borderRadius: 12, paddingVertical: 13, alignItems: "center", marginTop: 4 },
+  mcpBtnText: { color: theme.accent, fontWeight: "700", fontSize: 14 },
   saved: { color: theme.accent, fontSize: 13, marginTop: 14, textAlign: "center" },
   logHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 26 },
   clearText: { color: theme.danger, fontSize: 13, fontWeight: "600" },

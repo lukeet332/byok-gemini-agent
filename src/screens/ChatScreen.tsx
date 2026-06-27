@@ -32,6 +32,7 @@ import {
 } from "expo-speech-recognition";
 
 import { AbortedError, compactConversation, runAgentTurn } from "../agent/GeminiAgent";
+import McpServersModal from "./McpServersModal";
 import {
   COMPACT_THRESHOLD_CHARS,
   KEEP_RECENT_TURNS,
@@ -149,6 +150,7 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
   const [pendingImage, setPendingImage] = useState<{ uri: string; data: string; mimeType: string } | null>(null);
   const [autoMode, setAutoModeState] = useState(false);
   const [autoMenu, setAutoMenu] = useState(false);
+  const [mcpVisible, setMcpVisible] = useState(false);
   const autoModeRef = useRef(false);
   const voiceIdRef = useRef<string | undefined>(undefined);
 
@@ -357,6 +359,12 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
 
   function handleSendMessage(userPrompt: string) {
     const prompt = userPrompt.trim();
+    // Slash commands (handled locally, not sent to the model).
+    if (prompt === "/mcp") {
+      setInput("");
+      setMcpVisible(true);
+      return;
+    }
     const image = pendingImage;
     if ((!prompt && !image) || !thread) return;
     const wasVoice = voiceInputRef.current;
@@ -650,6 +658,8 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
           </TouchableOpacity>
         </View>
       </View>
+
+      <McpServersModal visible={mcpVisible} onClose={() => setMcpVisible(false)} />
 
       <Modal visible={autoMenu} transparent animationType="fade" onRequestClose={() => setAutoMenu(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAutoMenu(false)}>

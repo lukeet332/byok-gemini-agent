@@ -16,6 +16,7 @@ import { BrowserEngine } from "../browser/BrowserEngine";
 import * as Device from "../device/DeviceTools";
 import * as Files from "../device/FileTools";
 import * as Github from "../device/GithubTools";
+import * as McpClient from "../mcp/McpClient";
 
 // Default model + the presets offered in Settings. Users can also type any
 // model id (e.g. a newer one) as a custom value.
@@ -360,6 +361,10 @@ export const TOOLS: Tool[] = [
   },
 ];
 
+// The tools actually sent to Gemini for the current turn = built-in TOOLS plus
+// any connected MCP servers' tools (recomputed at the start of each turn).
+let activeTools: Tool[] = TOOLS;
+
 // Replace every {{SECRET_NAME}} token with its stored value. Unknown names are
 // left untouched so the model can see they weren't resolved.
 async function substituteSecrets(text: string): Promise<string> {
@@ -569,7 +574,7 @@ async function callGemini(
   if (!apiKey) throw new Error("No Gemini API key. Add it in Settings.");
   const url = `${await genEndpoint()}?key=${encodeURIComponent(apiKey)}`;
   const payload: Record<string, unknown> = { contents, systemInstruction };
-  if (withTools) payload.tools = TOOLS;
+  if (withTools) payload.tools = activeTools;
 
   let res: Response;
   try {
@@ -606,7 +611,7 @@ async function streamModelTurn(
   if (!apiKey) throw new Error("No Gemini API key. Add it in Settings.");
   const model = (await getModel()) || DEFAULT_MODEL;
   const url = `${GEMINI_BASE}${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
-  const body = JSON.stringify({ contents, tools: TOOLS, systemInstruction });
+  const body = JSON.stringify({ contents, tools: activeTools, systemInstruction });
 
   const res = await expoFetch(url, {
     method: "POST",
@@ -786,6 +791,16 @@ export async function runAgentTurn(
   const setStatus = callbacks.onStatus ?? (() => {});
   const signal = callbacks.signal;
   const systemInstruction = await buildSystemInstruction(memo);
+  // Merge connected MCP servers' tools into this turn's tool set.
+  try {
+    await McpClient.ensureConnections();
+    const mcp = McpClient.getMcpToolDeclarations();
+    activeTools = mcp.length
+      ? [{ functionDeclarations: [...TOOLS[0].functionDeclarations, ...mcp] }]
+      : TOOLS;
+  } catch {
+    activeTools = TOOLS;
+  }
   const secrets = await collectSecretValues();
   const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
@@ -817,7 +832,13 @@ export async function runAgentTurn(
       setStatus(statusFor(call));
       const executor = TOOL_EXECUTORS[call.name];
       let result: Record<string, unknown>;
-      if (!executor) {
+      if (McpClient.isMcpTool(call.name)) {
+        try {
+          result = await McpClient.callMcpTool(call.name, call.args ?? {});
+        } catch (err) {
+          result = { ok: false, error: String(err) };
+        }
+      } else if (!executor) {
         result = { ok: false, error: `Unknown tool: ${call.name}` };
       } else {
         // Confirm EVERY state-changing / outward action before executing it.
