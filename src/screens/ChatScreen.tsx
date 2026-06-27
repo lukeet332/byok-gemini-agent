@@ -271,7 +271,9 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
               ? `The assistant wants to commit to GitHub:\n\n${url}\n\nAllow it?`
               : method === "SETTING"
                 ? `The assistant wants to change a setting:\n\n${url}\n\nAllow it?`
-                : `The assistant wants to send a ${method} request to:\n\n${url}\n\nThis can change data. Allow it?`;
+                : method === "SHELL"
+                  ? `The assistant wants to run a shell command on your device:\n\n${url}\n\nOnly allow commands you understand. Run it?`
+                  : `The assistant wants to send a ${method} request to:\n\n${url}\n\nThis can change data. Allow it?`;
     return new Promise((resolve) => {
       Alert.alert("Confirm action", body, [
         { text: "Decline", style: "cancel", onPress: () => resolve(false) },

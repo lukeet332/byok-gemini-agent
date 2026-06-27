@@ -1,0 +1,36 @@
+{
+    "logs": [
+        {
+            "outputFile": "expo.modules.shellexec.shell-exec-mergeReleaseResources-46:/values-v25/values-v25.xml",
+            "map": [
+                {
+                    "source": "/Users/luke/.gradle/caches/8.10.2/transforms/8eefb200c046a6e0de32e09f87ab4a14/transformed/appcompat-1.6.1/res/values-v25/values-v25.xml",
+                    "from": {
+                        "startLines": "2,3,4,6",
+                        "startColumns": "4,4,4,4",
+                        "startOffsets": "55,126,209,308",
+                        "endLines": "2,3,5,7",
+                        "endColumns": "70,82,12,12",
+                        "endOffsets": "121,204,303,414"
+                    }
+                }
+            ]
+        },
+        {
+            "outputFile": "expo.modules.shellexec.shell-exec-release-48:/values-v25/values-v25.xml",
+            "map": [
+                {
+                    "source": "/Users/luke/.gradle/caches/8.10.2/transforms/8eefb200c046a6e0de32e09f87ab4a14/transformed/appcompat-1.6.1/res/values-v25/values-v25.xml",
+                    "from": {
+                        "startLines": "2,3,4,6",
+                        "startColumns": "4,4,4,4",
+                        "startOffsets": "55,126,209,308",
+                        "endLines": "2,3,5,7",
+                        "endColumns": "70,82,12,12",
+                        "endOffsets": "121,204,303,414"
+                    }
+                }
+            ]
+        }
+    ]
+}

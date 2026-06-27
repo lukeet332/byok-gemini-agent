@@ -1,0 +1,18 @@
+<lint-module
+    format="1"
+    dir="/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android"
+    name=":shell-exec"
+    type="LIBRARY"
+    maven="com.lukeet332.shellexec:shell-exec:0.1.0"
+    agpVersion="8.6.0"
+    buildFolder="build"
+    bootClassPath="/Users/luke/Library/Android/sdk/platforms/android-35/android.jar:/Users/luke/Library/Android/sdk/build-tools/34.0.0/core-lambda-stubs.jar"
+    javaSourceLevel="17"
+    compileTarget="android-35"
+    neverShrinking="true">
+  <lintOptions
+      absolutePaths="true"
+      checkReleaseBuilds="true"
+      explainIssues="true"/>
+  <variant name="release"/>
+</lint-module>

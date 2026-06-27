@@ -36,6 +36,9 @@ const GITHUB_KEY = "GITHUB_TOKEN";
 // Keep an agent turn running when the app is backgrounded (Android foreground
 // service; iOS best-effort grace period). "" / "1" = on (default), "0" = off.
 const BACKGROUND_KEY = "BACKGROUND_RUN";
+// Allow the AI to run shell commands on-device (advanced; off by default).
+// "1" = on, anything else (incl. unset) = off. Powerful — gated + confirmed.
+const SHELL_KEY = "SHELL_EXEC";
 // How the AI's code changes land: "pr" (branch+PR), "branch", or "main".
 const WRITE_MODE_KEY = "GIT_WRITE_MODE";
 export type GitWriteMode = "pr" | "branch" | "main";
@@ -209,6 +212,16 @@ export async function getBackgroundRun(): Promise<boolean> {
 
 export async function saveBackgroundRun(on: boolean): Promise<void> {
   await SecureStore.setItemAsync(BACKGROUND_KEY, on ? "1" : "0");
+}
+
+// ---- Shell execution (advanced; default: off) ----
+
+export async function getShellEnabled(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(SHELL_KEY)) === "1";
+}
+
+export async function saveShellEnabled(on: boolean): Promise<void> {
+  await SecureStore.setItemAsync(SHELL_KEY, on ? "1" : "0");
 }
 
 // ---- Git write mode (default: branch + PR) ----

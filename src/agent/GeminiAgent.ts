@@ -18,6 +18,7 @@ import {
   getOpenAiConfig,
   getProvider,
   getSecretValue,
+  getShellEnabled,
   getSystemPrompt,
   listSecretNames,
   saveBackgroundRun,
@@ -34,6 +35,7 @@ import * as Device from "../device/DeviceTools";
 import * as Files from "../device/FileTools";
 import * as Github from "../device/GithubTools";
 import * as McpClient from "../mcp/McpClient";
+import * as Shell from "../../modules/shell-exec";
 
 // Default model + the presets offered in Settings. Users can also type any
 // model id (e.g. a newer one) as a custom value.
@@ -415,6 +417,28 @@ export const TOOLS: Tool[] = [
   },
 ];
 
+// Shell execution is advanced + dangerous, so its declaration is only offered
+// to the model when the user has enabled it (added to the turn's tool set then).
+const SHELL_TOOL: FunctionDeclaration = {
+  name: "run_shell",
+  description:
+    "Run a shell command ON THE DEVICE and get back stdout, stderr and the exit code. Runs as " +
+    "the app (`sh -c`) by default; set root=true to run as root (`su -c`) — only do that if the " +
+    "user has a rooted device and the command genuinely needs system access (it fails if there's " +
+    "no su). Android ships toybox, so coreutils (ls, cat, grep, ps, getprop…) work without root; " +
+    "compilers/interpreters only work if the user has installed them. Use this to inspect the " +
+    "device, run scripts, and — where toolchains exist — build/test code and iterate on failures. " +
+    "Each command needs the user's confirmation. Prefer root=false.",
+  parameters: {
+    type: "object",
+    properties: {
+      command: { type: "string", description: "The shell command line to run." },
+      root: { type: "boolean", description: "Run as root via su (default false). Only on rooted devices." },
+    },
+    required: ["command"],
+  },
+};
+
 // The tools actually sent to Gemini for the current turn = built-in TOOLS plus
 // any connected MCP servers' tools (recomputed at the start of each turn).
 let activeTools: Tool[] = TOOLS;
@@ -471,6 +495,25 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
   update_user_notes: async (args) => {
     await saveUserNotes(String(args.notes ?? ""));
     return { ok: true };
+  },
+  run_shell: async (args) => {
+    if (!(await getShellEnabled()))
+      return { ok: false, error: "Shell execution is disabled. The user can turn it on in Settings." };
+    const command = String(args.command ?? "");
+    if (!command.trim()) return { ok: false, error: "Missing command." };
+    const root = args.root === true || args.root === "true";
+    try {
+      const r = await Shell.exec(command, root, 120000);
+      return {
+        ok: r.exitCode === 0 && !r.timedOut,
+        exitCode: r.exitCode,
+        timedOut: r.timedOut,
+        stdout: r.stdout,
+        stderr: r.stderr,
+      };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
   },
   update_setting: async (args) => {
     const key = String(args.key ?? "").trim().toLowerCase();
@@ -538,7 +581,7 @@ function redactString(text: string, secrets: string[]): string {
 function redactResult(result: Record<string, unknown>, secrets: string[]): Record<string, unknown> {
   if (!secrets.length) return result;
   const out: Record<string, unknown> = { ...result };
-  for (const k of ["body", "content", "results", "error"]) {
+  for (const k of ["body", "content", "results", "error", "stdout", "stderr"]) {
     if (typeof out[k] === "string") out[k] = redactString(out[k] as string, secrets);
   }
   return out;
@@ -647,6 +690,10 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
       ? `\n\nDense memory of earlier conversation (your own notes, may be terse):\n${memo.trim()}`
       : "";
 
+  const shellLine = (await getShellEnabled().catch(() => false))
+    ? "\n\nShell execution is ENABLED: you can run_shell(command, root?) on the device. Use it to inspect the device, run scripts, and — where the needed toolchains are installed — build and TEST code, then read the output and fix failures (the compile→run→fix loop). Prefer root=false; only use root=true on a rooted device when system access is required. Every command is confirmed by the user."
+    : "";
+
   const mcp = McpClient.connectedSummary();
   const mcpLine = mcp
     ? `\n\nConnected MCP integrations — their tools are available to you (named mcp__<server>__<tool>); USE them whenever the request relates to that service: ${mcp}.`
@@ -657,7 +704,7 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
     ? `\n\nWhat you know about this user (their notes/preferences — honour them; update via update_user_notes when you learn something durable):\n${notes}`
     : `\n\nYou have no saved notes about this user yet. When you learn a durable preference, save it with update_user_notes.`;
 
-  return { role: "user", parts: [{ text: base + secretsLine + mcpLine + notesBlock + memoBlock }] };
+  return { role: "user", parts: [{ text: base + secretsLine + shellLine + mcpLine + notesBlock + memoBlock }] };
 }
 
 // Single attempt — NO auto-retry. Retrying burns more of the same quota; the UI
@@ -1171,6 +1218,7 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "write_file" || call.name === "create_file") return "Writing file...";
   if (call.name === "update_user_notes") return "Updating your notes...";
   if (call.name === "update_setting") return `Updating setting: ${String(call.args?.key ?? "")}`;
+  if (call.name === "run_shell") return `Running command: ${String(call.args?.command ?? "")}`;
   if (call.name === "github_list_path" || call.name === "github_get_file") return `Reading repo: ${String(call.args?.repo ?? "")}`;
   if (call.name === "github_search_code") return "Searching code...";
   if (call.name === "github_commit") return `Committing to ${String(call.args?.repo ?? "")}...`;
@@ -1190,14 +1238,16 @@ export async function runAgentTurn(
   const signal = callbacks.signal;
   // Merge connected MCP servers' tools into this turn's tool set (before building
   // the prompt, so it can name the live integrations).
+  const shellOn = await getShellEnabled().catch(() => false);
+  const builtins = shellOn
+    ? [...TOOLS[0].functionDeclarations, SHELL_TOOL]
+    : [...TOOLS[0].functionDeclarations];
   try {
     await McpClient.ensureConnections();
     const mcp = McpClient.getMcpToolDeclarations();
-    activeTools = mcp.length
-      ? [{ functionDeclarations: [...TOOLS[0].functionDeclarations, ...mcp] }]
-      : TOOLS;
+    activeTools = [{ functionDeclarations: [...builtins, ...mcp] }];
   } catch {
-    activeTools = TOOLS;
+    activeTools = [{ functionDeclarations: builtins }];
   }
   const systemInstruction = await buildSystemInstruction(memo);
   const secrets = await collectSecretValues();
@@ -1250,6 +1300,11 @@ export async function runAgentTurn(
           needsConfirm = true;
           confirmMethod = "FILE";
           confirmUrl = String(a.uri ?? a.name ?? "a file");
+        } else if (call.name === "run_shell") {
+          needsConfirm = true;
+          confirmMethod = "SHELL";
+          const isRoot = a.root === true || a.root === "true";
+          confirmUrl = `${isRoot ? "[root] " : ""}${String(a.command ?? "")}`;
         } else if (call.name === "update_setting") {
           needsConfirm = true;
           confirmMethod = "SETTING";

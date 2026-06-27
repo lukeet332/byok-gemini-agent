@@ -1,0 +1,14 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-22
+INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-22
+	package
+		INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml
+uses-sdk
+INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml
+INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml

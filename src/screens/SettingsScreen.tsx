@@ -25,6 +25,7 @@ import {
   getBackgroundRun,
   getGeminiKey,
   getGithubToken,
+  getShellEnabled,
   getModel,
   getOpenAiConfig,
   getProvider,
@@ -36,6 +37,7 @@ import {
   saveAnthropicConfig,
   saveBackgroundRun,
   saveGithubToken,
+  saveShellEnabled,
   saveModel,
   saveOpenAiConfig,
   saveProvider,
@@ -103,6 +105,7 @@ export default function SettingsScreen() {
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("");
   const [backgroundRun, setBackgroundRunState] = useState(true);
+  const [shellEnabled, setShellEnabledState] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -117,6 +120,7 @@ export default function SettingsScreen() {
       setAnthropicKey(an.apiKey);
       setAnthropicModel(an.model);
       setBackgroundRunState(await getBackgroundRun());
+      setShellEnabledState(await getShellEnabled());
       setGithubToken(await getGithubToken());
       setWriteMode(await getWriteMode());
       setSystemPrompt(await getSystemPrompt());
@@ -162,6 +166,7 @@ export default function SettingsScreen() {
       await saveOpenAiConfig({ baseUrl: openaiBase, apiKey: openaiKey, model: openaiModel });
       await saveAnthropicConfig({ apiKey: anthropicKey, model: anthropicModel });
       await saveBackgroundRun(backgroundRun);
+      await saveShellEnabled(shellEnabled);
       await saveGithubToken(githubToken);
       await saveWriteMode(writeMode);
       await saveSystemPrompt(systemPrompt);
@@ -424,6 +429,25 @@ export default function SettingsScreen() {
               setBackgroundRunState(v);
               if (v) void requestNotificationPermission();
             }}
+            trackColor={{ false: theme.border, true: theme.accent }}
+            thumbColor={theme.text}
+          />
+        </View>
+
+        <Text style={styles.sectionLabel}>Shell execution (advanced)</Text>
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleTextWrap}>
+            <Text style={styles.toggleName}>Let the AI run shell commands</Text>
+            <Text style={styles.hint}>
+              Gives the AI a run_shell tool to execute commands on this device — inspect the system, run
+              scripts, and (where you've installed toolchains) build & test code. Runs as the app by default;
+              it can request root (su) on rooted devices. Every command asks you to confirm first. Powerful and
+              risky — leave off unless you know what you're doing.
+            </Text>
+          </View>
+          <Switch
+            value={shellEnabled}
+            onValueChange={setShellEnabledState}
             trackColor={{ false: theme.border, true: theme.accent }}
             thumbColor={theme.text}
           />
