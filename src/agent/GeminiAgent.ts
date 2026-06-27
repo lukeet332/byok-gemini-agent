@@ -21,6 +21,8 @@ import {
   getShellEnabled,
   getSystemPrompt,
   listSecretNames,
+  normalizeSecretName,
+  saveSecret,
   saveBackgroundRun,
   saveModel,
   saveProvider,
@@ -125,6 +127,8 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "- For app handoffs prefer standard intents/deep links: ACTION_SENDTO (smsto:/mailto:), ACTION_SEND, ACTION_INSERT (calendar/contacts), ACTION_VIEW, ACTION_DIAL. Remember these open the target app; truly background actions are only possible via an API (http_request).",
   "- REMEMBER LASTING PREFERENCES. If the user asks you to always do something — a tone/voice (formal, casual, blunt), length (brief), format, language, or any standing instruction or fact to remember — immediately save it with update_user_notes so it persists across all future chats. Don't save one-off requests. (Behaviour/persona lives in user notes, NOT in your own instructions.)",
   "- CHANGE APP SETTINGS ON REQUEST. If the user asks to change a setting, use update_setting (key = model | provider | background | write_mode). It asks them to confirm. You can't set API keys/secrets; behaviour/tone goes to update_user_notes, not here.",
+  "- CREDENTIALS. The user may share an API key/token/secret. Judge whether it's actually a credential and what service it's for, agree a clear NAME, and store it with save_secret(name, value). Once stored, its raw value is PURGED from this conversation and you reference it as {{NAME}} thereafter — NEVER repeat the raw value in a reply. Don't nanny: if the user wants something stored, store it. Users can also add keys in Settings.",
+  "- SHOW CODE CHANGES AS DIFFS. When you propose or make a code change, show it as a unified diff inside a ```diff code block (lines starting +/- ) so the user can review the exact changes — they render colourised. Do this by default for non-trivial edits, and ALWAYS when the user asks to see the diff. For tiny one-liners a short inline mention is fine.",
   "- Be concise and direct. Use markdown. Include relevant image URLs so they render inline.",
 ].join("\n");
 
@@ -323,6 +327,22 @@ export const TOOLS: Tool[] = [
           type: "object",
           properties: { notes: { type: "string", description: "The full updated notes (markdown)." } },
           required: ["notes"],
+        },
+      },
+      {
+        name: "save_secret",
+        description:
+          "Securely store an API key / token / credential the user gives you, in the on-device keystore under " +
+          "a clear NAME (e.g. STRIPE_API_KEY). Use this whenever the user shares a credential they want kept. " +
+          "After you store it, the raw value is PURGED from the conversation — reference it as {{NAME}} in " +
+          "http_request from then on, and NEVER repeat the raw value in your replies.",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Clear uppercase name, e.g. STRIPE_API_KEY." },
+            value: { type: "string", description: "The secret value to store." },
+          },
+          required: ["name", "value"],
         },
       },
       {
@@ -768,6 +788,14 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     if (!Shell.a11yEnabled()) return { ok: false, error: "Accessibility automation is off." };
     const ok = await Shell.a11yGlobal(String(args.action ?? ""));
     return ok ? { ok: true } : { ok: false, error: "action must be back, home, recents, or notifications." };
+  },
+  save_secret: async (args) => {
+    const name = normalizeSecretName(String(args.name ?? ""));
+    const value = String(args.value ?? "");
+    if (!name) return { ok: false, error: "Provide a clear NAME (e.g. STRIPE_API_KEY)." };
+    if (!value) return { ok: false, error: "No value provided." };
+    await saveSecret(name, value);
+    return { ok: true, name, note: `Stored securely. Reference it as {{${name}}} — don't repeat the raw value.` };
   },
   update_setting: async (args) => {
     const key = String(args.key ?? "").trim().toLowerCase();
@@ -1404,6 +1432,27 @@ async function generateText(prompt: string): Promise<string> {
   return textIn(turn);
 }
 
+// After the AI stores a credential with save_secret, purge the raw value from
+// the conversation (the user's pasted text + the tool-call args) so it isn't
+// persisted in the saved transcript or re-sent on later turns — replaced with
+// the {{NAME}} reference it's now stored under.
+function scrubFromHistory(history: Content[], value: string, name: string): void {
+  if (!value || value.length < 4) return;
+  const ref = `{{${name}}}`;
+  for (const c of history) {
+    for (const p of c.parts ?? []) {
+      if (typeof p.text === "string" && p.text.includes(value)) p.text = p.text.split(value).join(ref);
+      const args = p.functionCall?.args;
+      if (args) {
+        for (const k of Object.keys(args)) {
+          const v = args[k];
+          if (typeof v === "string" && v.includes(value)) args[k] = v.split(value).join(ref);
+        }
+      }
+    }
+  }
+}
+
 function functionCallsIn(content: Content): FunctionCall[] {
   return (content.parts ?? [])
     .map((p) => p.functionCall)
@@ -1501,6 +1550,7 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "pick_file") return "Waiting for file pick...";
   if (call.name === "write_file" || call.name === "create_file") return "Writing file...";
   if (call.name === "update_user_notes") return "Updating your notes...";
+  if (call.name === "save_secret") return "Saving credential securely...";
   if (call.name === "update_setting") return `Updating setting: ${String(call.args?.key ?? "")}`;
   if (call.name === "run_shell") return `Running command: ${String(call.args?.command ?? "")}`;
   if (call.name === "run_termux") return `Running in Termux: ${String(call.args?.command ?? "")}`;
@@ -1635,6 +1685,12 @@ export async function runAgentTurn(
         }
       }
       result = redactResult(result, secrets);
+      // A credential was just stored → purge its raw value from the transcript.
+      if (call.name === "save_secret" && result.ok) {
+        const v = String(call.args?.value ?? "");
+        scrubFromHistory(history, v, String(result.name ?? "SECRET"));
+        if (v.length >= 4) secrets.push(v); // also scrub it from later tool output this turn
+      }
       await maybeLogFailure(call, result, ctx);
       responseParts.push({ functionResponse: { name: call.name, response: result } });
     }

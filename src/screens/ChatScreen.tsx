@@ -756,11 +756,39 @@ const mdRules = {
     />
   ),
   // Code blocks scroll horizontally so long lines don't overflow or wrap ugly.
-  fence: (node: { key: string; content: string }) => (
-    <ScrollView key={node.key} horizontal showsHorizontalScrollIndicator={false} style={styles.codeBlock} contentContainerStyle={styles.codeBlockInner}>
-      <Text style={styles.codeText}>{node.content}</Text>
-    </ScrollView>
-  ),
+  // ```diff blocks render git-style with +/- line colouring (CLI-like review).
+  fence: (node: { key: string; content: string; sourceInfo?: string }) => {
+    const lang = (node.sourceInfo || "").trim().toLowerCase();
+    if (lang === "diff" || lang === "patch") {
+      const lines = node.content.replace(/\n$/, "").split("\n");
+      return (
+        <ScrollView key={node.key} horizontal showsHorizontalScrollIndicator={false} style={styles.codeBlock} contentContainerStyle={styles.codeBlockInner}>
+          <View>
+            {lines.map((ln, i) => {
+              const style =
+                ln.startsWith("+") && !ln.startsWith("+++")
+                  ? styles.diffAdd
+                  : ln.startsWith("-") && !ln.startsWith("---")
+                    ? styles.diffDel
+                    : ln.startsWith("@@")
+                      ? styles.diffHunk
+                      : null;
+              return (
+                <Text key={i} style={[styles.codeText, style]}>
+                  {ln.length ? ln : " "}
+                </Text>
+              );
+            })}
+          </View>
+        </ScrollView>
+      );
+    }
+    return (
+      <ScrollView key={node.key} horizontal showsHorizontalScrollIndicator={false} style={styles.codeBlock} contentContainerStyle={styles.codeBlockInner}>
+        <Text style={styles.codeText}>{node.content}</Text>
+      </ScrollView>
+    );
+  },
   code_block: (node: { key: string; content: string }) => (
     <ScrollView key={node.key} horizontal showsHorizontalScrollIndicator={false} style={styles.codeBlock} contentContainerStyle={styles.codeBlockInner}>
       <Text style={styles.codeText}>{node.content}</Text>
@@ -779,6 +807,9 @@ const styles = StyleSheet.create({
   codeBlock: { backgroundColor: theme.surfaceAlt, borderRadius: 8, marginVertical: 6, maxWidth: "100%" },
   codeBlockInner: { padding: 10 },
   codeText: { color: theme.text, fontSize: 13, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+  diffAdd: { color: "#3fb950" },
+  diffDel: { color: "#f85149" },
+  diffHunk: { color: theme.accent },
   alignRight: { alignSelf: "flex-end", borderBottomRightRadius: 4 },
   alignLeft: { alignSelf: "flex-start", borderBottomLeftRadius: 4 },
   userBubble: { backgroundColor: theme.userBubble, paddingVertical: 10 },
