@@ -846,12 +846,15 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
     avail +=
       " UI AUTOMATION (with shizuku/root): to drive another app, do NOT guess tap coordinates. First dump the screen — run_shell('uiautomator dump /sdcard/v.xml && cat /sdcard/v.xml', 'shizuku') — find the target node by its text/resource-id, read its bounds [x1,y1][x2,y2], then tap the CENTRE: run_shell('input tap <cx> <cy>', 'shizuku'). Re-dump after each step to confirm the new screen state. Use 'input text', 'input keyevent', and 'am start' similarly.";
     shellLine = "\n\n" + avail;
+  } else {
+    shellLine =
+      "\n\nShell execution is OFF. If the user asks you to run commands, build or test code, use Termux, or use Shizuku/root, do NOT just refuse — tell them to enable it in Settings → Advanced mode (Shell execution), then ask you again.";
   }
 
   const a11yLine = Shell.a11yEnabled()
     ? "\n\nSCREEN AUTOMATION is ENABLED (accessibility): ui_screen (read the current screen's elements), ui_tap({text|id}), ui_type({text}), ui_global({back|home|recents|notifications}) — drive ANY app by element text/id, not coordinates." +
       " CHOOSING HOW TO ACT (pick the simplest that fully works, in this order): (1) a real API via http_request — most reliable and fully background; use it if the service has one and a key is stored. (2) A deep link / intent (open_link / send_android_intent) that completes the task in one shot — e.g. 'sms:'/'mailto:' with a body, 'tel:', a maps/spotify link. (3) Screen automation when there's no API/deep link, or to finish what a deep link only set up. MANY app actions are 'deep link to pre-fill + accessibility to finish': e.g. WhatsApp — open_link 'https://wa.me/<number>?text=<urlencoded>' (this opens the chat with the message typed), then ui_screen, ui_tap the 'Send' control by its text/description, then ui_global('home') to return to Fraude. Always ui_screen before tapping and again after, and verify the expected element exists before acting. tap/type ask the user to confirm unless Auto mode is on."
-    : "";
+    : "\n\nScreen automation is OFF. If the user asks you to operate or automate another app's UI (tap/type/press buttons inside it — e.g. send a WhatsApp/Telegram message through the app), do NOT just refuse — tell them to enable it in Settings → Screen automation first, then retry. (You can still use direct deep links and APIs without it.)";
 
   const mcp = McpClient.connectedSummary();
   const mcpLine = mcp
