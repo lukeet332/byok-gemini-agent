@@ -22,6 +22,7 @@ interface NativeShell {
   execShizuku: (command: string, timeoutMs: number) => Promise<ShellResult>;
   shizukuStatus: () => Promise<ShizukuStatus>;
   requestShizukuPermission: () => Promise<boolean>;
+  runTermux: (commandLine: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 let native: NativeShell | null = null;
@@ -68,5 +69,16 @@ export async function requestShizukuPermission(): Promise<boolean> {
     return await native.requestShizukuPermission();
   } catch {
     return false;
+  }
+}
+
+// Fire a command into Termux (where installed toolchains live). Fire-and-forget;
+// redirect output to a file and read it back via exec/execShizuku.
+export async function runTermux(commandLine: string): Promise<{ ok: boolean; error?: string }> {
+  if (!native) return { ok: false, error: "Only available on Android." };
+  try {
+    return await native.runTermux(commandLine);
+  } catch (e) {
+    return { ok: false, error: String(e) };
   }
 }

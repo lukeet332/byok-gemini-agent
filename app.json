@@ -24,7 +24,8 @@
       "package": "com.lukeet332.byokgeminiagent",
       "edgeToEdgeEnabled": true,
       "permissions": [
-        "android.permission.QUERY_ALL_PACKAGES"
+        "android.permission.QUERY_ALL_PACKAGES",
+        "com.termux.permission.RUN_COMMAND"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

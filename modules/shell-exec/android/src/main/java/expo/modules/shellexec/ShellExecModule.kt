@@ -1,6 +1,8 @@
 package expo.modules.shellexec
 
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -56,6 +58,27 @@ class ShellExecModule : Module() {
         Shizuku.requestPermission(permissionCode)
       } catch (e: Throwable) {
         promise.resolve(false)
+      }
+    }
+
+    // Fire a command into Termux's environment (where pkg-installed toolchains —
+    // python, node, clang, git — live) via its RUN_COMMAND service. We hold the
+    // com.termux.permission.RUN_COMMAND permission. This is fire-and-forget;
+    // redirect output to a file and read it back with run_shell (shizuku/root).
+    AsyncFunction("runTermux") { commandLine: String ->
+      val ctx = appContext.reactContext ?: return@AsyncFunction mapOf("ok" to false, "error" to "No context.")
+      try {
+        val intent = Intent().apply {
+          setClassName("com.termux", "com.termux.app.RunCommandService")
+          action = "com.termux.RUN_COMMAND"
+          putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
+          putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-c", commandLine))
+          putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+        }
+        if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(intent) else ctx.startService(intent)
+        mapOf("ok" to true)
+      } catch (e: Throwable) {
+        mapOf("ok" to false, "error" to (e.message ?: e.toString()))
       }
     }
 

@@ -444,6 +444,25 @@ const SHELL_TOOL: FunctionDeclaration = {
   },
 };
 
+// Run a command inside Termux (real toolchains), capturing output. Offered only
+// when shell execution is enabled.
+const TERMUX_TOOL: FunctionDeclaration = {
+  name: "run_termux",
+  description:
+    "Run a command inside Termux — the real local toolchain (python, node, clang, git, make, etc., " +
+    "whatever the user has `pkg install`ed). Use this (NOT run_shell) to build, run and TEST actual code: " +
+    "e.g. 'cd ~/proj && npm test', 'python main.py', 'gcc a.c -o a && ./a', 'git clone … && cd … && git " +
+    "checkout -b fix'. Requires the user to have Termux installed with allow-external-apps=true; output is " +
+    "captured and returned (reading it back needs Shizuku or root). Needs the user's confirmation.",
+  parameters: {
+    type: "object",
+    properties: {
+      command: { type: "string", description: "The command line to run inside Termux (bash -c)." },
+    },
+    required: ["command"],
+  },
+};
+
 // The tools actually sent to Gemini for the current turn = built-in TOOLS plus
 // any connected MCP servers' tools (recomputed at the start of each turn).
 let activeTools: Tool[] = TOOLS;
@@ -522,6 +541,43 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     } catch (e) {
       return { ok: false, error: String(e) };
     }
+  },
+  run_termux: async (args, signal) => {
+    if (!(await getShellEnabled()))
+      return { ok: false, error: "Shell execution is disabled. The user can turn it on in Settings → Advanced mode." };
+    const command = String(args.command ?? "");
+    if (!command.trim()) return { ok: false, error: "Missing command." };
+    const out = "/data/data/com.termux/files/home/.fraude_termux_out";
+    // Run in Termux, capturing stdout+stderr and a done-marker with the exit code.
+    const wrapped = `{ ${command} ; } > ${out} 2>&1; echo "__FRAUDE_DONE_$?__" >> ${out}`;
+    const fired = await Shell.runTermux(wrapped);
+    if (!fired.ok)
+      return {
+        ok: false,
+        error:
+          (fired.error ? fired.error + ". " : "") +
+          "Couldn't start Termux. Ensure Termux is installed and ~/.termux/termux.properties has allow-external-apps=true.",
+      };
+    // Read the output back. Termux's home is private, so reading needs shizuku/root.
+    const z = await Shell.shizukuStatus();
+    const read = () =>
+      z.granted ? Shell.execShizuku(`cat ${out} 2>/dev/null`, 5000) : Shell.exec(`cat ${out} 2>/dev/null`, true, 5000);
+    for (let i = 0; i < 15; i++) {
+      if (signal?.aborted) throw new AbortedError();
+      await sleep(2000, signal);
+      const r = await read();
+      const m = (r.stdout || "").match(/__FRAUDE_DONE_(\d+)__/);
+      if (m) {
+        const exitCode = parseInt(m[1], 10);
+        const stdout = (r.stdout || "").replace(/__FRAUDE_DONE_\d+__\s*$/, "").trim();
+        return { ok: exitCode === 0, exitCode, stdout };
+      }
+    }
+    return {
+      ok: false,
+      timedOut: true,
+      note: "Started in Termux but couldn't read output within the time limit (either still running, or reading Termux's files needs Shizuku/root).",
+    };
   },
   update_setting: async (args) => {
     const key = String(args.key ?? "").trim().toLowerCase();
@@ -715,6 +771,12 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
     avail +=
       " Use it to inspect the device, run scripts, automate apps, and (where toolchains exist) build+TEST code then fix failures. Prefer the lowest privilege that works. IMPORTANT: 'shizuku' and 'root' commands ALWAYS ask the user to confirm (even in Auto mode) — do NOT assume silent execution; explain what each command does. Examples: screenshot = run_shell('screencap -p /sdcard/s.png', 'shizuku'); grant a permission = run_shell('pm grant " +
       "com.lukeet332.byokgeminiagent android.permission.PACKAGE_USAGE_STATS', 'shizuku').";
+    // Real-toolchain coding loop (Termux) — like a CLI build/test cycle.
+    avail +=
+      " CODING WITH REAL TOOLCHAINS: run_shell has no compilers; use run_termux(command) instead — it runs in Termux where python/node/clang/git/make live. Work like a CLI agent: clone or open a project, make a SURGICAL edit (write just the changed file/lines), then run_termux the build/test ('npm test', 'python -m pytest', 'gcc … && ./a'), READ the output, and fix failures — loop until green. Use real local git in Termux (git checkout -b, git diff to verify, git commit, git push) rather than blind whole-file GitHub commits.";
+    // Robust UI automation — never guess coordinates (CLI-style hierarchy lookup).
+    avail +=
+      " UI AUTOMATION (with shizuku/root): to drive another app, do NOT guess tap coordinates. First dump the screen — run_shell('uiautomator dump /sdcard/v.xml && cat /sdcard/v.xml', 'shizuku') — find the target node by its text/resource-id, read its bounds [x1,y1][x2,y2], then tap the CENTRE: run_shell('input tap <cx> <cy>', 'shizuku'). Re-dump after each step to confirm the new screen state. Use 'input text', 'input keyevent', and 'am start' similarly.";
     shellLine = "\n\n" + avail;
   }
 
@@ -1243,6 +1305,7 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "update_user_notes") return "Updating your notes...";
   if (call.name === "update_setting") return `Updating setting: ${String(call.args?.key ?? "")}`;
   if (call.name === "run_shell") return `Running command: ${String(call.args?.command ?? "")}`;
+  if (call.name === "run_termux") return `Running in Termux: ${String(call.args?.command ?? "")}`;
   if (call.name === "github_list_path" || call.name === "github_get_file") return `Reading repo: ${String(call.args?.repo ?? "")}`;
   if (call.name === "github_search_code") return "Searching code...";
   if (call.name === "github_commit") return `Committing to ${String(call.args?.repo ?? "")}...`;
@@ -1264,7 +1327,7 @@ export async function runAgentTurn(
   // the prompt, so it can name the live integrations).
   const shellOn = await getShellEnabled().catch(() => false);
   const builtins = shellOn
-    ? [...TOOLS[0].functionDeclarations, SHELL_TOOL]
+    ? [...TOOLS[0].functionDeclarations, SHELL_TOOL, TERMUX_TOOL]
     : [...TOOLS[0].functionDeclarations];
   try {
     await McpClient.ensureConnections();
@@ -1330,6 +1393,10 @@ export async function runAgentTurn(
           const priv = String(a.privilege ?? "app").toLowerCase();
           const tag = priv === "root" ? "[root] " : priv === "shizuku" ? "[shizuku] " : "";
           confirmUrl = `${tag}${String(a.command ?? "")}`;
+        } else if (call.name === "run_termux") {
+          needsConfirm = true;
+          confirmMethod = "SHELL";
+          confirmUrl = `[termux] ${String(a.command ?? "")}`;
         } else if (call.name === "update_setting") {
           needsConfirm = true;
           confirmMethod = "SETTING";
