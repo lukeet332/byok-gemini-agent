@@ -36,9 +36,15 @@ const GITHUB_KEY = "GITHUB_TOKEN";
 // Keep an agent turn running when the app is backgrounded (Android foreground
 // service; iOS best-effort grace period). "" / "1" = on (default), "0" = off.
 const BACKGROUND_KEY = "BACKGROUND_RUN";
-// Allow the AI to run shell commands on-device (advanced; off by default).
-// "1" = on, anything else (incl. unset) = off. Powerful — gated + confirmed.
-const SHELL_KEY = "SHELL_EXEC";
+// Single execution backend the AI uses for running code/commands (so it's never
+// ambiguous which to use). Default "off" (GitHub-only, no on-device execution).
+//   off     — no shell/termux tools; edit via GitHub.
+//   app     — run_shell in Fraude's own sandbox (toybox; no compilers).
+//   termux  — run_termux real toolchains (python/node/clang/git) + sandbox shell.
+//   shizuku — run_shell at ADB/shell-uid (device control + commands) + termux.
+//   root    — run_shell as root + termux.
+const EXEC_MODE_KEY = "EXEC_MODE";
+export type ExecMode = "off" | "app" | "termux" | "shizuku" | "root";
 // Always confirm system-level actions (Shizuku/root shell) even in Auto mode.
 // "" / "1" = on (default), "0" = off. Safety rail for elevated commands.
 const CONFIRM_SYSTEM_KEY = "CONFIRM_SYSTEM";
@@ -217,14 +223,20 @@ export async function saveBackgroundRun(on: boolean): Promise<void> {
   await SecureStore.setItemAsync(BACKGROUND_KEY, on ? "1" : "0");
 }
 
-// ---- Shell execution (advanced; default: off) ----
+// ---- Execution mode (advanced; default: off) ----
 
-export async function getShellEnabled(): Promise<boolean> {
-  return (await SecureStore.getItemAsync(SHELL_KEY)) === "1";
+export async function getExecMode(): Promise<ExecMode> {
+  const v = (await SecureStore.getItemAsync(EXEC_MODE_KEY)) as ExecMode | null;
+  return v === "app" || v === "termux" || v === "shizuku" || v === "root" ? v : "off";
 }
 
-export async function saveShellEnabled(on: boolean): Promise<void> {
-  await SecureStore.setItemAsync(SHELL_KEY, on ? "1" : "0");
+export async function saveExecMode(mode: ExecMode): Promise<void> {
+  await SecureStore.setItemAsync(EXEC_MODE_KEY, mode);
+}
+
+// Convenience flags used around the app.
+export async function isExecOn(): Promise<boolean> {
+  return (await getExecMode()) !== "off";
 }
 
 // Always confirm Shizuku/root commands even in Auto mode (default: on).

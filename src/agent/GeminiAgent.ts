@@ -16,9 +16,9 @@ import {
   getGithubToken,
   getModel,
   getOpenAiConfig,
+  getExecMode,
   getProvider,
   getSecretValue,
-  getShellEnabled,
   getSystemPrompt,
   listSecretNames,
   normalizeSecretName,
@@ -442,23 +442,15 @@ export const TOOLS: Tool[] = [
 const SHELL_TOOL: FunctionDeclaration = {
   name: "run_shell",
   description:
-    "Run a shell command ON THE DEVICE and get back stdout, stderr and the exit code. The " +
-    "'privilege' level controls who runs it: 'app' (default) = the app's own sandbox uid; " +
-    "'shizuku' = ADB/shell-uid privileges WITHOUT root (works if the user has set up the Shizuku " +
-    "app — far more powerful: pm, cmd, settings, input/am UI automation, etc.); 'root' = full root " +
-    "via su (rooted devices only). Android ships toybox, so coreutils (ls, cat, grep, ps, getprop…) " +
-    "work even at 'app' level; compilers/interpreters only if installed. Use this to inspect the " +
-    "device, run scripts, automate other apps (with shizuku/root), and — where toolchains exist — " +
-    "build/test code and iterate on failures. Each command needs the user's confirmation. Prefer " +
-    "the lowest level that works; escalate to shizuku/root only when needed.",
+    "Run a shell command ON THE DEVICE and get back stdout, stderr and the exit code. The privilege is " +
+    "fixed by the user's chosen Execution mode (stated in your instructions): app = the app's sandbox uid " +
+    "(toybox coreutils only); shizuku = ADB/shell-uid (pm, cmd, settings, input/am automation, read " +
+    "anything); root = full root. Use it to inspect the device, run scripts, automate other apps " +
+    "(shizuku/root), and run quick commands. Each command needs the user's confirmation.",
   parameters: {
     type: "object",
     properties: {
       command: { type: "string", description: "The shell command line to run." },
-      privilege: {
-        type: "string",
-        description: "One of: 'app' (default, sandbox), 'shizuku' (ADB/shell-uid, no root), 'root' (su).",
-      },
     },
     required: ["command"],
   },
@@ -682,16 +674,17 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     return { ok: true };
   },
   run_shell: async (args) => {
-    if (!(await getShellEnabled()))
-      return { ok: false, error: "Shell execution is disabled. The user can turn it on in Settings." };
+    const mode = await getExecMode();
+    if (mode === "off")
+      return { ok: false, error: "Execution is off. The user can pick an Execution mode in Settings → Advanced mode." };
     const command = String(args.command ?? "");
     if (!command.trim()) return { ok: false, error: "Missing command." };
-    const privilege = String(args.privilege ?? "app").toLowerCase();
     try {
+      // The active mode fixes the privilege — no ambiguity for the model.
       const r =
-        privilege === "shizuku"
+        mode === "shizuku"
           ? await Shell.execShizuku(command, 120000)
-          : await Shell.exec(command, privilege === "root", 120000);
+          : await Shell.exec(command, mode === "root", 120000); // app/termux → sandbox sh
       return {
         ok: r.exitCode === 0 && !r.timedOut,
         exitCode: r.exitCode,
@@ -704,8 +697,8 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     }
   },
   run_termux: async (args, signal) => {
-    if (!(await getShellEnabled()))
-      return { ok: false, error: "Shell execution is disabled. The user can turn it on in Settings → Advanced mode." };
+    if ((await getExecMode()) === "off")
+      return { ok: false, error: "Execution is off. The user can pick an Execution mode in Settings → Advanced mode." };
     const command = String(args.command ?? "");
     if (!command.trim()) return { ok: false, error: "Missing command." };
     const fired = await Shell.runTermux(sessionWrap(command));
@@ -744,8 +737,8 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     return { ok: true, stdout: view, totalChars: total, ...(nextOffset != null ? { readMoreOffset: nextOffset } : {}) };
   },
   apply_patch: async (args, signal) => {
-    if (!(await getShellEnabled()))
-      return { ok: false, error: "Shell execution is disabled. The user can turn it on in Settings → Advanced mode." };
+    if ((await getExecMode()) === "off")
+      return { ok: false, error: "Execution is off. The user can pick an Execution mode in Settings → Advanced mode." };
     const diff = String(args.diff ?? "");
     if (!diff.trim()) return { ok: false, error: "Missing diff (provide a unified git diff)." };
     const eof = "FRAUDE_PATCH_EOF";
@@ -972,33 +965,49 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
       ? `\n\nDense memory of earlier conversation (your own notes, may be terse):\n${memo.trim()}`
       : "";
 
+  const execMode = await getExecMode().catch(() => "off" as const);
+  let shizuku: { running: boolean; granted: boolean } = { running: false, granted: false };
+  try {
+    shizuku = await Shell.shizukuStatus();
+  } catch {
+    // unavailable
+  }
+  const shizukuState = shizuku.granted
+    ? "connected & granted"
+    : shizuku.running
+      ? "running but NOT granted (tell the user to grant it in Settings → Advanced mode)"
+      : "NOT running (tell the user to install/start the Shizuku app, then grant it in Settings → Advanced mode)";
+
   let shellLine = "";
-  if (await getShellEnabled().catch(() => false)) {
-    let avail =
-      "Shell execution is ENABLED: run_shell(command, privilege?) where privilege = 'app' (sandbox, default), 'shizuku' (ADB/shell-uid, no root), or 'root' (su, rooted only).";
-    try {
-      const z = await Shell.shizukuStatus();
-      avail += z.granted
-        ? " Shizuku is CONNECTED right now — privilege:'shizuku' works: pm grant / appops (grant yourself permissions), am + input (automate other apps' UI), settings put, screencap (then look at the image), dumpsys, and reading /sdcard freely."
-        : z.running
-          ? " Shizuku is running but NOT granted yet — tell the user to grant it in Settings → Advanced mode before using privilege:'shizuku'."
-          : " Shizuku is NOT running — only privilege:'app' (toybox coreutils: ls, grep, cat, ps, getprop…) works, unless the device is rooted (privilege:'root').";
-    } catch {
-      // status unavailable — leave the generic guidance
-    }
-    avail +=
-      " Use it to inspect the device, run scripts, automate apps, and (where toolchains exist) build+TEST code then fix failures. Prefer the lowest privilege that works. IMPORTANT: 'shizuku' and 'root' commands ALWAYS ask the user to confirm (even in Auto mode) — do NOT assume silent execution; explain what each command does. Examples: screenshot = run_shell('screencap -p /sdcard/s.png', 'shizuku'); grant a permission = run_shell('pm grant " +
-      "com.lukeet332.byokgeminiagent android.permission.PACKAGE_USAGE_STATS', 'shizuku').";
-    // Real-toolchain coding loop (Termux) — like a CLI build/test cycle.
-    avail +=
-      " CODING WITH REAL TOOLCHAINS: run_shell has no compilers; use run_termux(command) instead — it runs in Termux where python/node/clang/git/make live. It's a PERSISTENT session: your working directory (cd) and exported env (incl. activated virtualenvs) carry over between run_termux calls, so cd into the repo once and keep going. Output is captured in FULL — the result shows the start + the end (errors are usually at the end); if it's truncated or the command was still running, call read_log(offset) to read the rest. For edits, prefer apply_patch(diff) with a unified git diff (surgical) over rewriting whole files. Loop like a CLI agent: cd repo → apply_patch or edit → run_termux build/test ('npm test', 'pytest', 'gcc … && ./a') → read output → fix → repeat until green. Use real local git in Termux (git checkout -b, git diff, git commit, git push). NOTE: reading Termux output needs Shizuku, root, OR All files access (Settings → Advanced) — if it can't read output, tell the user to enable one of those. On Android 16+ devices the native Linux Terminal (Settings → Advanced) is an even better full-Debian environment for heavy builds; you can't execute inside it directly yet, so point the user there for big local work while you use run_termux for automated runs.";
-    // Robust UI automation — never guess coordinates (CLI-style hierarchy lookup).
-    avail +=
-      " UI AUTOMATION (with shizuku/root): to drive another app, do NOT guess tap coordinates. First dump the screen — run_shell('uiautomator dump /sdcard/v.xml && cat /sdcard/v.xml', 'shizuku') — find the target node by its text/resource-id, read its bounds [x1,y1][x2,y2], then tap the CENTRE: run_shell('input tap <cx> <cy>', 'shizuku'). Re-dump after each step to confirm the new screen state. Use 'input text', 'input keyevent', and 'am start' similarly.";
-    shellLine = "\n\n" + avail;
-  } else {
+  if (execMode === "off") {
     shellLine =
-      "\n\nShell execution is OFF. If the user asks you to run commands, build or test code, use Termux, or use Shizuku/root, do NOT just refuse — tell them to enable it in Settings → Advanced mode (Shell execution), then ask you again.";
+      "\n\nExecution mode is OFF — you have no on-device shell/Termux tools. If the user asks you to run, build or test code, or operate the device, do NOT just refuse: tell them to pick an Execution mode in Settings → Advanced mode (Termux for coding without root, Shizuku for device control, Root if rooted), then retry.";
+  } else {
+    let avail = `\n\nExecution mode: ${execMode.toUpperCase()}. `;
+    if (execMode === "app")
+      avail += "run_shell(command) runs in the app's own sandbox — toybox coreutils only (ls/grep/cat/ps/getprop…); no compilers, can't see other apps. For real coding, the user should switch to Termux mode.";
+    else if (execMode === "termux")
+      avail +=
+        "run_shell(command) = quick sandbox shell; run_termux(command) = the REAL toolchain (python/node/clang/git/make) for building & testing code.";
+    else if (execMode === "shizuku")
+      avail += `run_shell(command) runs at ADB/shell-uid (pm grant/appops, settings, input/am app automation, screencap, dumpsys, read any file); run_termux(command) = real toolchain. Shizuku is ${shizukuState}.`;
+    else if (execMode === "root")
+      avail += "run_shell(command) runs as ROOT (full system access); run_termux(command) = real toolchain.";
+
+    if (execMode === "termux" || execMode === "shizuku" || execMode === "root") {
+      avail +=
+        " CODING: use run_termux for compilers — it's a PERSISTENT session (cd + env, incl. activated venvs, carry over between calls). Output is captured in FULL (shows start+end; call read_log(offset) for more). Prefer apply_patch(diff) (surgical git apply) over rewriting whole files. Loop like a CLI agent: cd repo → apply_patch/edit → run_termux test → read output → fix → repeat. Use real git in Termux (branch/diff/commit/push).";
+      if (execMode === "termux")
+        avail += " NOTE: in this no-root mode, reading Termux output needs All files access — if output can't be read, tell the user to grant it in Settings → Advanced mode.";
+    }
+    if (execMode === "shizuku" || execMode === "root") {
+      avail +=
+        " DEVICE AUTOMATION: to drive another app's UI via shell, don't guess coordinates — run_shell('uiautomator dump /sdcard/v.xml && cat /sdcard/v.xml'), find the node by text/resource-id, tap its bounds centre with run_shell('input tap <cx> <cy>'), re-dump after each step. Grant yourself permissions with 'pm grant <pkg> <perm>'. These run with elevated privilege and ALWAYS ask the user to confirm (even in Auto mode).";
+    } else {
+      // Non-privileged modes: still let the AI guide the user toward Shizuku.
+      avail += ` (Shizuku is ${shizukuState} — if the user wants device control/automation or no-root output, Shizuku mode needs it.)`;
+    }
+    shellLine = avail;
   }
 
   const a11yLine = Shell.a11yEnabled()
@@ -1579,9 +1588,12 @@ export async function runAgentTurn(
   const signal = callbacks.signal;
   // Merge connected MCP servers' tools into this turn's tool set (before building
   // the prompt, so it can name the live integrations).
-  const shellOn = await getShellEnabled().catch(() => false);
+  const execMode = await getExecMode().catch(() => "off" as const);
   const builtins = [...TOOLS[0].functionDeclarations];
-  if (shellOn) builtins.push(SHELL_TOOL, TERMUX_TOOL, READ_LOG_TOOL, APPLY_PATCH_TOOL);
+  if (execMode !== "off") builtins.push(SHELL_TOOL);
+  // Termux toolchain tools only in modes that can use it.
+  if (execMode === "termux" || execMode === "shizuku" || execMode === "root")
+    builtins.push(TERMUX_TOOL, READ_LOG_TOOL, APPLY_PATCH_TOOL);
   if (Shell.a11yEnabled()) builtins.push(...UI_TOOLS);
   try {
     await McpClient.ensureConnections();
@@ -1644,8 +1656,7 @@ export async function runAgentTurn(
         } else if (call.name === "run_shell") {
           needsConfirm = true;
           confirmMethod = "SHELL";
-          const priv = String(a.privilege ?? "app").toLowerCase();
-          const tag = priv === "root" ? "[root] " : priv === "shizuku" ? "[shizuku] " : "";
+          const tag = execMode === "root" ? "[root] " : execMode === "shizuku" ? "[shizuku] " : "";
           confirmUrl = `${tag}${String(a.command ?? "")}`;
         } else if (call.name === "run_termux") {
           needsConfirm = true;

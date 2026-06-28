@@ -24,9 +24,9 @@ import {
   getAnthropicConfig,
   getBackgroundRun,
   getConfirmSystemActions,
+  getExecMode,
   getGeminiKey,
   getGithubToken,
-  getShellEnabled,
   getModel,
   getOpenAiConfig,
   getProvider,
@@ -38,14 +38,15 @@ import {
   saveAnthropicConfig,
   saveBackgroundRun,
   saveConfirmSystemActions,
+  saveExecMode,
   saveGithubToken,
-  saveShellEnabled,
   saveModel,
   saveOpenAiConfig,
   saveProvider,
   saveSystemPrompt,
   saveWriteMode,
   AiProvider,
+  ExecMode,
   GitWriteMode,
   NamedSecret,
 } from "../storage/SecureStorage";
@@ -124,7 +125,7 @@ export default function SettingsScreen() {
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("");
   const [backgroundRun, setBackgroundRunState] = useState(true);
-  const [shellEnabled, setShellEnabledState] = useState(false);
+  const [execMode, setExecModeState] = useState<ExecMode>("off");
   const [confirmSystem, setConfirmSystemState] = useState(true);
 
   // Latest form values + a "loaded" flag, so we can auto-save on leave (a cleanup
@@ -140,7 +141,7 @@ export default function SettingsScreen() {
     anthropicKey,
     anthropicModel,
     backgroundRun,
-    shellEnabled,
+    execMode,
     confirmSystem,
     githubToken,
     writeMode,
@@ -158,7 +159,7 @@ export default function SettingsScreen() {
     anthropicKey,
     anthropicModel,
     backgroundRun,
-    shellEnabled,
+    execMode,
     confirmSystem,
     githubToken,
     writeMode,
@@ -180,7 +181,7 @@ export default function SettingsScreen() {
       setAnthropicKey(an.apiKey);
       setAnthropicModel(an.model);
       setBackgroundRunState(await getBackgroundRun());
-      setShellEnabledState(await getShellEnabled());
+      setExecModeState(await getExecMode());
       setConfirmSystemState(await getConfirmSystemActions());
       setShizuku(await shizukuStatus());
       setA11yOn(a11yEnabled());
@@ -245,7 +246,7 @@ export default function SettingsScreen() {
     await saveOpenAiConfig({ baseUrl: v.openaiBase, apiKey: v.openaiKey, model: v.openaiModel });
     await saveAnthropicConfig({ apiKey: v.anthropicKey, model: v.anthropicModel });
     await saveBackgroundRun(v.backgroundRun);
-    await saveShellEnabled(v.shellEnabled);
+    await saveExecMode(v.execMode);
     await saveConfirmSystemActions(v.confirmSystem);
     await saveGithubToken(v.githubToken);
     await saveWriteMode(v.writeMode);
@@ -712,26 +713,33 @@ export default function SettingsScreen() {
               {"• Do things in other apps (e.g. send a WhatsApp): Screen automation — no root needed.\n"}
               {"• Shizuku = ADB-level powers (pm, settings, input, grant permissions, read anything) WITHOUT root.\n"}
               {"• Root = everything Shizuku does + system files + system-app install (rooted devices only).\n"}
-              {"• Shell execution alone = only basic built-in tools in Fraude's own sandbox; pair it with Termux for real coding.\n"}
+              {"• Set ONE Execution mode (below) = the single backend the AI runs commands with: App sandbox / Termux / Shizuku / Root.\n"}
               {"• Linux Terminal (Android 16+) = a full Debian VM for heavy manual coding; Fraude can't drive it yet, so use Termux for automated runs."}
             </Text>
             <Text style={[styles.hint, { marginTop: 8 }]}>Powerful and risky — only enable what you need.</Text>
 
-            <View style={styles.toggleRow}>
-              <View style={styles.toggleTextWrap}>
-                <Text style={styles.toggleName}>Shell execution</Text>
-                <Text style={styles.hint}>
-                  Gives the AI a run_shell tool. Runs in the app sandbox by default; can escalate to Shizuku or
-                  root. Every command asks you to confirm first.
-                </Text>
-              </View>
-              <Switch
-                value={shellEnabled}
-                onValueChange={setShellEnabledState}
-                trackColor={{ false: theme.border, true: theme.accent }}
-                thumbColor={theme.text}
-              />
-            </View>
+            <Text style={styles.smallLabel}>Execution mode</Text>
+            <Text style={styles.hint}>
+              Pick the ONE backend the AI runs code/commands with (so it's never confused which to use). Set up
+              the matching tool below.
+            </Text>
+            {(
+              [
+                { id: "off", label: "Off", desc: "No on-device execution (edit via GitHub)." },
+                { id: "app", label: "App sandbox", desc: "Basic built-in tools only; no compilers." },
+                { id: "termux", label: "Termux", desc: "Real toolchains (python/node/clang/git). No root." },
+                { id: "shizuku", label: "Shizuku", desc: "ADB-level: device control + commands + Termux." },
+                { id: "root", label: "Root", desc: "Full root + Termux (rooted devices)." },
+              ] as { id: ExecMode; label: string; desc: string }[]
+            ).map((m) => (
+              <TouchableOpacity key={m.id} style={styles.modelRow} onPress={() => setExecModeState(m.id)}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.modelName}>{m.label}</Text>
+                  <Text style={styles.modelDesc}>{m.desc}</Text>
+                </View>
+                {execMode === m.id ? <Text style={styles.modelCheck}>✓</Text> : null}
+              </TouchableOpacity>
+            ))}
 
             <View style={styles.toggleRow}>
               <View style={styles.toggleTextWrap}>
