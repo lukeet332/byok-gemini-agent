@@ -187,6 +187,7 @@ interface Props {
   threadId: string;
   onThreadChanged: () => void; // tell the list to refresh (title/updatedAt)
   onOpenSettings: () => void; // navigate to Settings (for tappable notices)
+  onBack: () => void; // pop back to the thread list
   initialText?: string; // text shared into the app, to pre-fill the composer
   onShareConsumed?: () => void;
   initialSend?: string; // a routine prompt to auto-send once the thread loads
@@ -197,6 +198,7 @@ export default function ChatScreen({
   threadId,
   onThreadChanged,
   onOpenSettings,
+  onBack,
   initialText,
   onShareConsumed,
   initialSend,
@@ -245,6 +247,9 @@ export default function ChatScreen({
   const targetRef = useRef("");
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  // Height of the floating bottom bar (composer + any banners), measured so the
+  // list reserves exactly that much space and messages scroll cleanly behind it.
+  const [bottomBarH, setBottomBarH] = useState(88);
 
   function ensureTicker() {
     if (tickRef.current) return;
@@ -342,9 +347,16 @@ export default function ChatScreen({
       if (!busyRef.current) return false;
       Alert.alert("Task running", "Leaving will cancel the running task. Leave anyway?", [
         { text: "Stay", style: "cancel" },
-        { text: "Leave & cancel", style: "destructive", onPress: () => abortRef.current?.abort() },
+        {
+          text: "Leave & cancel",
+          style: "destructive",
+          onPress: () => {
+            abortRef.current?.abort();
+            onBack();
+          },
+        },
       ]);
-      return true; // block the default back action
+      return true; // block the default back action (we handle it above)
     });
     return () => sub.remove();
   }, []);
@@ -812,7 +824,7 @@ export default function ChatScreen({
         keyExtractor={(m) => m.id}
         renderItem={renderItem}
         extraData={`${speakingId}|${busy}`}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingBottom: bottomBarH + 12 }]}
         onContentSizeChange={scrollToEnd}
         ListFooterComponent={
           displayed !== "" ? (
@@ -831,6 +843,11 @@ export default function ChatScreen({
         }
       />
 
+      <View
+        style={styles.bottomBar}
+        onLayout={(e) => setBottomBarH(e.nativeEvent.layout.height)}
+        pointerEvents="box-none"
+      >
       {status ? (
         <View style={styles.statusRow}>
           <ActivityIndicator size="small" color={theme.accent} />
@@ -914,6 +931,7 @@ export default function ChatScreen({
             <Ionicons name="arrow-up" size={20} color={theme.bg} />
           </TouchableOpacity>
         </View>
+      </View>
       </View>
 
       <McpServersModal visible={mcpVisible} onClose={() => setMcpVisible(false)} />
@@ -1169,6 +1187,7 @@ const styles = StyleSheet.create({
   },
   resumeText: { color: theme.bg, fontWeight: "700", fontSize: 14 },
   statusText: { color: theme.textDim, fontSize: 13, fontStyle: "italic", flex: 1 },
+  bottomBar: { position: "absolute", left: 0, right: 0, bottom: 0 },
   composer: {
     margin: 10,
     borderRadius: 18,

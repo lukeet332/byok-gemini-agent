@@ -1,13 +1,15 @@
 // Thread list: every locally-saved conversation. Tap to open, swipe-free delete
 // button per row, and a prominent "New chat" action.
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
   ListRenderItemInfo,
   Modal,
+  PanResponder,
   ScrollView,
   StyleSheet,
   Text,
@@ -35,6 +37,35 @@ interface Props {
   onOpen: (id: string) => void;
   onNew: () => void;
   onRunRoutine: (prompt: string) => void;
+}
+
+// Swipe a row left to ask to delete it. Uses core PanResponder (no extra deps):
+// only claims the gesture on a clear horizontal drag, so tap-to-open and the
+// list's vertical scroll still work. Springs back after release; the actual
+// delete is gated behind a confirmation in `onRequestDelete`.
+function SwipeableRow({ onRequestDelete, children }: { onRequestDelete: () => void; children: React.ReactNode }) {
+  const tx = useRef(new Animated.Value(0)).current;
+  const pan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => g.dx < -12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      onPanResponderMove: (_e, g) => tx.setValue(Math.max(-140, Math.min(0, g.dx))),
+      onPanResponderRelease: (_e, g) => {
+        if (g.dx < -80) onRequestDelete();
+        Animated.spring(tx, { toValue: 0, useNativeDriver: true, bounciness: 0 }).start();
+      },
+      onPanResponderTerminate: () => Animated.spring(tx, { toValue: 0, useNativeDriver: true }).start(),
+    })
+  ).current;
+  return (
+    <View style={styles.swipeWrap}>
+      <View style={styles.swipeBg}>
+        <Text style={styles.swipeBgText}>Delete</Text>
+      </View>
+      <Animated.View style={{ transform: [{ translateX: tx }] }} {...pan.panHandlers}>
+        {children}
+      </Animated.View>
+    </View>
+  );
 }
 
 export default function ThreadListScreen({ onOpen, onNew, onRunRoutine }: Props) {
@@ -81,19 +112,28 @@ export default function ThreadListScreen({ onOpen, onNew, onRunRoutine }: Props)
     reload();
   }
 
+  function confirmDeleteThread(t: ThreadMeta) {
+    Alert.alert("Delete chat", `Delete “${t.title}”? This can’t be undone.`, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => onDelete(t.id) },
+    ]);
+  }
+
   function renderItem({ item }: ListRenderItemInfo<ThreadMeta>) {
     return (
-      <View style={styles.row}>
-        <TouchableOpacity style={styles.rowMain} onPress={() => onOpen(item.id)}>
-          <Text style={styles.rowTitle} numberOfLines={1}>
-            {item.title}
-          </Text>
-          <Text style={styles.rowTime}>{ago(item.updatedAt)}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => onDelete(item.id)} style={styles.del}>
-          <Text style={styles.delText}>Delete</Text>
-        </TouchableOpacity>
-      </View>
+      <SwipeableRow onRequestDelete={() => confirmDeleteThread(item)}>
+        <View style={styles.row}>
+          <TouchableOpacity style={styles.rowMain} onPress={() => onOpen(item.id)}>
+            <Text style={styles.rowTitle} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={styles.rowTime}>{ago(item.updatedAt)}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => confirmDeleteThread(item)} style={styles.del} hitSlop={6}>
+            <Text style={styles.delText}>Delete</Text>
+          </TouchableOpacity>
+        </View>
+      </SwipeableRow>
     );
   }
 
@@ -224,6 +264,16 @@ const styles = StyleSheet.create({
   saveRoutine: { backgroundColor: theme.accent, borderRadius: 12, paddingVertical: 14, alignItems: "center", marginTop: 2 },
   saveRoutineText: { color: theme.bg, fontWeight: "700", fontSize: 15 },
   disabled: { opacity: 0.4 },
+  swipeWrap: { marginVertical: 5, borderRadius: 12, overflow: "hidden" },
+  swipeBg: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: theme.danger,
+    borderRadius: 12,
+    alignItems: "flex-end",
+    justifyContent: "center",
+    paddingRight: 24,
+  },
+  swipeBgText: { color: "#fff", fontWeight: "800", fontSize: 14 },
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -231,7 +281,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.border,
     borderRadius: 12,
-    marginVertical: 5,
   },
   rowMain: { flex: 1, paddingVertical: 14, paddingHorizontal: 14 },
   rowTitle: { color: theme.text, fontSize: 16, fontWeight: "600" },

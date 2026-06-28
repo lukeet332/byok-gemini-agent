@@ -4,7 +4,7 @@
 // thread pushes the chat view (with a back button to the list).
 
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, AppState, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, AppState, BackHandler, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { getShareIntent } from "./modules/shell-exec";
@@ -51,6 +51,23 @@ export default function App() {
       await setStartupPermsDone();
     })();
   }, [splashDone]);
+
+  // Android back / back-swipe: navigate WITHIN the app (chat or settings → the
+  // list) instead of exiting. Only on the list do we let Android close the app.
+  // ChatScreen registers its own handler too (it mounts after this, so it runs
+  // first): it blocks back while a task is running, otherwise returns false and
+  // this handler takes over to pop to the list.
+  useEffect(() => {
+    const onBack = () => {
+      if (view === "chat" || view === "settings") {
+        setView("list");
+        return true;
+      }
+      return false; // already on the list — allow the OS to background/exit
+    };
+    const sub = BackHandler.addEventListener("hardwareBackPress", onBack);
+    return () => sub.remove();
+  }, [view]);
 
   function openThread(id: string) {
     setActiveThreadId(id);
@@ -115,6 +132,7 @@ export default function App() {
               threadId={activeThreadId}
               onThreadChanged={() => setListVersion((v) => v + 1)}
               onOpenSettings={() => setView("settings")}
+              onBack={() => setView("list")}
               initialText={sharedText ?? undefined}
               onShareConsumed={() => setSharedText(null)}
               initialSend={routinePrompt ?? undefined}
