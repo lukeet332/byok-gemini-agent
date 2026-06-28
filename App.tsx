@@ -4,9 +4,10 @@
 // thread pushes the chat view (with a back button to the list).
 
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, AppState, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import { getShareIntent } from "./modules/shell-exec";
 
 import AnimatedSplash from "./src/screens/AnimatedSplash";
 import HiddenBrowser from "./src/browser/HiddenBrowser";
@@ -30,6 +31,8 @@ export default function App() {
   // null = still checking; false = needs setup; true = ready.
   const [ready, setReady] = useState<boolean | null>(null);
   const [splashDone, setSplashDone] = useState(false);
+  // Text shared into Fraude from another app (via "Share → Fraude").
+  const [sharedText, setSharedText] = useState<string | null>(null);
 
   useEffect(() => {
     hasModelAccess().then(setReady);
@@ -42,6 +45,23 @@ export default function App() {
   function newChat() {
     openThread(newThreadId());
   }
+
+  // If launched/resumed via a share, open a fresh chat pre-filled with the text.
+  useEffect(() => {
+    if (!ready) return;
+    const handle = () => {
+      const s = getShareIntent();
+      if (s && s.text) {
+        setSharedText(s.subject ? `${s.subject}\n${s.text}` : s.text);
+        openThread(newThreadId());
+      }
+    };
+    handle();
+    const sub = AppState.addEventListener("change", (st) => {
+      if (st === "active") handle();
+    });
+    return () => sub.remove();
+  }, [ready]);
 
   const onChats = view === "list" || view === "chat";
 
@@ -77,6 +97,8 @@ export default function App() {
               threadId={activeThreadId}
               onThreadChanged={() => setListVersion((v) => v + 1)}
               onOpenSettings={() => setView("settings")}
+              initialText={sharedText ?? undefined}
+              onShareConsumed={() => setSharedText(null)}
             />
           ) : (
             <SettingsScreen />

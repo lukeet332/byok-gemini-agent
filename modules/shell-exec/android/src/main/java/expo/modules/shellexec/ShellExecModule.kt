@@ -143,6 +143,20 @@ class ShellExecModule : Module() {
       true
     }
 
+    // If the app was launched via a "Share → Fraude" (ACTION_SEND) intent, return
+    // the shared text/subject and consume it. Lets other apps push content in.
+    Function("getShareIntent") {
+      val act = appContext.currentActivity ?: return@Function null
+      val intent = act.intent ?: return@Function null
+      if (intent.action != Intent.ACTION_SEND) return@Function null
+      val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+      val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
+      // Consume it so a later resume doesn't re-handle the same share.
+      intent.action = null
+      intent.removeExtra(Intent.EXTRA_TEXT)
+      if (text.isNullOrBlank()) null else mapOf("text" to text, "subject" to (subject ?: ""))
+    }
+
     // ---- Accessibility-based UI automation (no root / Shizuku needed) ----
 
     // Is our accessibility service enabled in system settings?

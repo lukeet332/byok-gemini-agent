@@ -139,9 +139,11 @@ interface Props {
   threadId: string;
   onThreadChanged: () => void; // tell the list to refresh (title/updatedAt)
   onOpenSettings: () => void; // navigate to Settings (for tappable notices)
+  initialText?: string; // text shared into the app, to pre-fill the composer
+  onShareConsumed?: () => void;
 }
 
-export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }: Props) {
+export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings, initialText, onShareConsumed }: Props) {
   const [thread, setThread] = useState<Thread | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -393,6 +395,15 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
       active = false;
     };
   }, [threadId]);
+
+  // Pre-fill the composer with text shared into the app (capture flow).
+  useEffect(() => {
+    if (initialText) {
+      setInput(initialText);
+      onShareConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialText]);
 
   function scrollToEnd() {
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));

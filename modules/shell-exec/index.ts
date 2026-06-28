@@ -35,6 +35,7 @@ interface NativeShell {
   requestAllFilesAccess: () => boolean;
   linuxTerminalStatus: () => { supported: boolean; available: boolean; sdk: number };
   openLinuxTerminal: () => boolean;
+  getShareIntent: () => { text: string; subject: string } | null;
 }
 
 export interface LinuxTerminalStatus {
@@ -178,5 +179,14 @@ export function openLinuxTerminal(): void {
     native?.openLinuxTerminal();
   } catch {
     // ignore
+  }
+}
+
+// Returns shared text if the app was opened via "Share → Fraude", else null.
+export function getShareIntent(): { text: string; subject: string } | null {
+  try {
+    return native ? native.getShareIntent() : null;
+  } catch {
+    return null;
   }
 }
