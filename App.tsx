@@ -7,6 +7,7 @@ import React, { useEffect, useState } from "react";
 import { ActivityIndicator, AppState, BackHandler, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import { getShareIntent } from "./modules/shell-exec";
 
 import AnimatedSplash from "./src/screens/AnimatedSplash";
@@ -118,8 +119,9 @@ export default function App() {
       <SafeAreaView style={styles.root} edges={["top", "bottom"]}>
         {view === "chat" ? (
           <View style={styles.chatHeader}>
-            <TouchableOpacity onPress={() => setView("list")} style={styles.back}>
-              <Text style={styles.backText}>‹ Chats</Text>
+            <TouchableOpacity onPress={() => setView("list")} style={styles.back} hitSlop={8}>
+              <Ionicons name="chevron-back" size={22} color={theme.accent} style={styles.backIcon} />
+              <Text style={styles.backText}>Chats</Text>
             </TouchableOpacity>
           </View>
         ) : null}
@@ -184,7 +186,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: theme.border,
   },
-  back: { paddingVertical: 4, paddingHorizontal: 6 },
+  back: { flexDirection: "row", alignItems: "center", paddingVertical: 4, paddingHorizontal: 4 },
+  backIcon: { marginRight: 1, marginTop: 1 }, // optical alignment with the text
   backText: { color: theme.accent, fontSize: 16, fontWeight: "600" },
   tabBar: { flexDirection: "row", borderTopWidth: 1, borderTopColor: theme.border, backgroundColor: theme.surface },
   tab: { flex: 1, alignItems: "center", paddingVertical: 12 },

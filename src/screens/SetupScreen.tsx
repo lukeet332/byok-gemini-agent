@@ -17,6 +17,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 import { OPENAI_PRESETS } from "../agent/GeminiAgent";
 import {
@@ -268,7 +269,7 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
 
         <TouchableOpacity style={styles.accordionHead} onPress={() => setDevOpen((o) => !o)}>
           <Text style={styles.label}>Developer settings (optional)</Text>
-          <Text style={styles.accordionChevron}>{devOpen ? "▾" : "▸"}</Text>
+          <Ionicons name={devOpen ? "chevron-down" : "chevron-forward"} size={18} color={theme.textDim} />
         </TouchableOpacity>
         {devOpen ? (
           <View style={styles.block}>

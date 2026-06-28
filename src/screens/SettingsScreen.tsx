@@ -20,6 +20,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 
 import {
   getAnthropicConfig,
@@ -381,7 +382,7 @@ export default function SettingsScreen() {
               return (
                 <TouchableOpacity style={styles.dropdown} onPress={() => setModelMenu(true)}>
                   <Text style={styles.dropdownText}>{preset ? `${preset.id} — ${preset.label}` : eff}</Text>
-                  <Text style={styles.dropdownChevron}>▾</Text>
+                  <Ionicons name="chevron-down" size={16} color={theme.textDim} />
                 </TouchableOpacity>
               );
             })()}
@@ -420,7 +421,7 @@ export default function SettingsScreen() {
               return (
                 <TouchableOpacity style={styles.dropdown} onPress={() => setAnthMenu(true)}>
                   <Text style={styles.dropdownText}>{preset ? `${preset.id} — ${preset.label}` : eff}</Text>
-                  <Text style={styles.dropdownChevron}>▾</Text>
+                  <Ionicons name="chevron-down" size={16} color={theme.textDim} />
                 </TouchableOpacity>
               );
             })()}
@@ -710,7 +711,7 @@ export default function SettingsScreen() {
 
         <TouchableOpacity style={styles.accordionHead} onPress={() => setPromptOpen((o) => !o)}>
           <Text style={styles.sectionLabel}>Agent instructions</Text>
-          <Text style={styles.accordionChevron}>{promptOpen ? "▾" : "▸"}</Text>
+          <Ionicons name={promptOpen ? "chevron-down" : "chevron-forward"} size={18} color={theme.textDim} style={styles.accordionChevron} />
         </TouchableOpacity>
         {promptOpen ? (
           <>
@@ -740,7 +741,7 @@ export default function SettingsScreen() {
 
         <TouchableOpacity style={styles.accordionHead} onPress={() => setNotesOpen((o) => !o)}>
           <Text style={styles.sectionLabel}>Your preferences (AI memory)</Text>
-          <Text style={styles.accordionChevron}>{notesOpen ? "▾" : "▸"}</Text>
+          <Ionicons name={notesOpen ? "chevron-down" : "chevron-forward"} size={18} color={theme.textDim} style={styles.accordionChevron} />
         </TouchableOpacity>
         {notesOpen ? (
           <>
@@ -776,7 +777,7 @@ export default function SettingsScreen() {
 
         <TouchableOpacity style={styles.accordionHead} onPress={() => setAdvancedOpen((o) => !o)}>
           <Text style={styles.sectionLabel}>Developer settings</Text>
-          <Text style={styles.accordionChevron}>{advancedOpen ? "▾" : "▸"}</Text>
+          <Ionicons name={advancedOpen ? "chevron-down" : "chevron-forward"} size={18} color={theme.textDim} style={styles.accordionChevron} />
         </TouchableOpacity>
         {advancedOpen ? (
           <>
@@ -913,9 +914,10 @@ export default function SettingsScreen() {
                   <Text style={styles.logGroupTitle} numberOfLines={1}>
                     {g.threadTitle || "Untitled chat"}
                   </Text>
-                  <Text style={styles.logCount}>
-                    {g.entries.length} {open ? "▾" : "▸"}
-                  </Text>
+                  <View style={styles.logCountWrap}>
+                    <Text style={styles.logCount}>{g.entries.length}</Text>
+                    <Ionicons name={open ? "chevron-down" : "chevron-forward"} size={14} color={theme.textDim} />
+                  </View>
                 </TouchableOpacity>
                 {open
                   ? g.entries.map((e) => (
@@ -1014,7 +1016,7 @@ const styles = StyleSheet.create({
   chipTextActive: { color: theme.accent, fontWeight: "700" },
   promptInput: { minHeight: 120, textAlignVertical: "top" },
   accordionHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 14 },
-  accordionChevron: { color: theme.textDim, fontSize: 16, marginTop: 14 },
+  accordionChevron: {},
   promptActions: { flexDirection: "row", justifyContent: "flex-end", gap: 20, marginTop: 8 },
   promptAction: { color: theme.accent, fontWeight: "700", fontSize: 13 },
   promptActionOff: { opacity: 0.4 },
@@ -1080,7 +1082,8 @@ const styles = StyleSheet.create({
     backgroundColor: theme.surface,
   },
   logGroupTitle: { color: theme.text, fontSize: 15, fontWeight: "600", flex: 1 },
-  logCount: { color: theme.textDim, fontSize: 13, marginLeft: 8 },
+  logCountWrap: { flexDirection: "row", alignItems: "center", gap: 5, marginLeft: 8 },
+  logCount: { color: theme.textDim, fontSize: 13 },
   logEntry: { paddingHorizontal: 13, paddingVertical: 10, borderTopWidth: 1, borderTopColor: theme.border, backgroundColor: theme.bg },
   logLine: { fontSize: 13 },
   logTool: { color: theme.accent, fontWeight: "700" },
