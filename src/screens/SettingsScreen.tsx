@@ -703,9 +703,19 @@ export default function SettingsScreen() {
         {advancedOpen ? (
           <>
             <Text style={styles.hint}>
-              Turn Fraude into a local coding agent — let it run shell commands and set up real programming
-              tools on this device, via Shizuku (no root) or root. Powerful and risky; for advanced users.
+              These give Fraude deeper powers, for two different jobs: CODING (build/run/test code) and DEVICE
+              CONTROL (operate the phone & other apps). Quick guide to what to enable:
             </Text>
+            <Text style={[styles.hint, { marginTop: 8 }]}>
+              {"• Coding, simplest (no root): install Termux + grant All files access → Fraude builds & tests with real tools.\n"}
+              {"• Coding, more power: add Shizuku (or root) so Fraude can also read any file and run system commands.\n"}
+              {"• Do things in other apps (e.g. send a WhatsApp): Screen automation — no root needed.\n"}
+              {"• Shizuku = ADB-level powers (pm, settings, input, grant permissions, read anything) WITHOUT root.\n"}
+              {"• Root = everything Shizuku does + system files + system-app install (rooted devices only).\n"}
+              {"• Shell execution alone = only basic built-in tools in Fraude's own sandbox; pair it with Termux for real coding.\n"}
+              {"• Linux Terminal (Android 16+) = a full Debian VM for heavy manual coding; Fraude can't drive it yet, so use Termux for automated runs."}
+            </Text>
+            <Text style={[styles.hint, { marginTop: 8 }]}>Powerful and risky — only enable what you need.</Text>
 
             <View style={styles.toggleRow}>
               <View style={styles.toggleTextWrap}>
