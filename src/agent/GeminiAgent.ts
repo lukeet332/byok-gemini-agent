@@ -143,11 +143,8 @@ export const TOOLS: Tool[] = [
       {
         name: "http_request",
         description:
-          "Make an HTTP request to ANY API on the user's behalf and get the " +
-          "response back. To authenticate, reference the user's stored secrets " +
-          "by name as {{SECRET_NAME}} inside the url, headers, or body — they are " +
-          "substituted securely on-device and never exposed to you. The available " +
-          "secret names are listed in the system instruction.",
+          "Call ANY API and get the response. Authenticate with {{SECRET_NAME}} in the url/headers/body — " +
+          "substituted on-device, never exposed to you (available names are in the system instruction).",
         parameters: {
           type: "object",
           properties: {
@@ -167,9 +164,7 @@ export const TOOLS: Tool[] = [
       {
         name: "fetch_webpage",
         description:
-          "Fetch a web page and return its readable text content (markup, scripts " +
-          "and styles removed; JavaScript-rendered pages supported) so you can " +
-          "read and digest it as context. Use after web_search to open a specific result.",
+          "Fetch a web page as clean readable text (JS-rendered pages supported). Use after web_search to open a result.",
         parameters: {
           type: "object",
           properties: {
@@ -185,9 +180,7 @@ export const TOOLS: Tool[] = [
       {
         name: "web_search",
         description:
-          "Search the web and get back the top results with their readable " +
-          "content. Use this FIRST when you need to find information, products, " +
-          "reviews, news, or any page whose URL you don't already know.",
+          "Search the web (top results + readable content). Use FIRST to find info/products/news or any page whose URL you don't know.",
         parameters: {
           type: "object",
           properties: {
@@ -323,10 +316,8 @@ export const TOOLS: Tool[] = [
       {
         name: "update_user_notes",
         description:
-          "Save/update your durable notes about THIS user — their chat preferences, " +
-          "style, recurring context, things to remember across chats. You are given the " +
-          "current notes each turn; pass the FULL updated markdown (you curate it: merge, " +
-          "dedupe, keep it concise). Use when you learn a lasting preference.",
+          "Save/update durable notes about THIS user (preferences, style, recurring context). You get the " +
+          "current notes each turn; pass the FULL updated markdown (curate: merge, dedupe, concise).",
         parameters: {
           type: "object",
           properties: { notes: { type: "string", description: "The full updated notes (markdown)." } },
@@ -359,17 +350,6 @@ export const TOOLS: Tool[] = [
           "Get the user's current location (lat/lng + a human-readable address) — for 'what's near me', " +
           "travel/ETA, location-based reminders. Asks for Location permission the first time.",
         parameters: { type: "object", properties: {} },
-      },
-      {
-        name: "read_notifications",
-        description:
-          "Read the device's recent incoming notifications (app, title, text, time) so you can triage or " +
-          "summarise what's arrived — e.g. 'what have I missed?', 'any important messages?'. Only works if the " +
-          "user has granted Fraude notification access (Settings → Notification access).",
-        parameters: {
-          type: "object",
-          properties: { limit: { type: "integer", description: "How many recent notifications to read (default 30)." } },
-        },
       },
       {
         name: "schedule_reminder",
@@ -444,10 +424,8 @@ export const TOOLS: Tool[] = [
       {
         name: "save_secret",
         description:
-          "Securely store an API key / token / credential the user gives you, in the on-device keystore under " +
-          "a clear NAME (e.g. STRIPE_API_KEY). Use this whenever the user shares a credential they want kept. " +
-          "After you store it, the raw value is PURGED from the conversation — reference it as {{NAME}} in " +
-          "http_request from then on, and NEVER repeat the raw value in your replies.",
+          "Securely store a credential the user shares, under a clear NAME (e.g. STRIPE_API_KEY). The raw value " +
+          "is then PURGED from the conversation — reference it as {{NAME}} in http_request, never repeat it.",
         parameters: {
           type: "object",
           properties: {
@@ -460,14 +438,9 @@ export const TOOLS: Tool[] = [
       {
         name: "update_setting",
         description:
-          "Change one of the user's app settings (requires their confirmation). Allowed keys: " +
-          "'model' (the model id for the current provider, e.g. gemini-2.5-flash), " +
-          "'provider' (gemini | anthropic | openai — only switch to one whose key is already set), " +
-          "'background' (on | off — keep a task running when the app is backgrounded), " +
-          "'write_mode' (pr | branch | main — how your GitHub changes land). " +
-          "You CANNOT set API keys or secret values, and you must NOT change your own agent " +
-          "instructions here — for tone/behaviour/standing preferences use update_user_notes instead. " +
-          "Use this only when the user explicitly asks to change one of these settings.",
+          "Change an app setting when the user asks (they confirm). Keys: 'model' (id for the current provider), " +
+          "'provider' (gemini|anthropic|openai — only one whose key is set), 'background' (on|off), 'write_mode' " +
+          "(pr|branch|main). Can't set keys/secrets; tone/behaviour → update_user_notes, not here.",
         parameters: {
           type: "object",
           properties: {
@@ -519,10 +492,9 @@ export const TOOLS: Tool[] = [
       {
         name: "github_commit",
         description:
-          "Commit code changes to a GitHub repo (one commit, multiple files). Provide the FULL new content " +
-          "of each changed/created file — blobs replace the whole file. Honours the user's write mode " +
-          "(branch+PR / branch / main) and requires their confirmation. Read the files first so you don't " +
-          "lose existing content.",
+          "Commit to a GitHub repo (one commit, many files) with the FULL new content of each file (blobs " +
+          "replace the whole file — read first so you don't lose content). For edits prefer github_apply_patch. " +
+          "Honours write mode; needs confirmation.",
         parameters: {
           type: "object",
           properties: {
@@ -548,12 +520,9 @@ export const TOOLS: Tool[] = [
       {
         name: "github_apply_patch",
         description:
-          "Make a SURGICAL edit to a GitHub repo by applying a unified git diff — preferred over github_commit " +
-          "for edits (no whole-file rewrite, works for everyone, no Termux). Provide a standard multi-file diff " +
-          "(diff --git a/… b/…, --- a/…, +++ b/…, @@ hunks). Fraude fetches each file, applies the hunks in-app, " +
-          "and commits per the user's write mode. If a hunk doesn't apply you'll get the failing files back — " +
-          "re-read them with github_get_file and regenerate the diff against their exact current contents. " +
-          "ALWAYS show the user the diff in a ```diff block when you do this. Needs confirmation.",
+          "SURGICAL edit to a GitHub repo via a unified git diff (preferred over github_commit; no Termux). " +
+          "Read the file first so the diff context matches; failing hunks come back so you can re-read + retry. " +
+          "Show the user the diff in a ```diff block. Honours write mode; needs confirmation.",
         parameters: {
           type: "object",
           properties: {
@@ -574,11 +543,9 @@ export const TOOLS: Tool[] = [
 const SHELL_TOOL: FunctionDeclaration = {
   name: "run_shell",
   description:
-    "Run a shell command ON THE DEVICE and get back stdout, stderr and the exit code. The privilege is " +
-    "fixed by the user's chosen Execution mode (stated in your instructions): app = the app's sandbox uid " +
-    "(toybox coreutils only); shizuku = ADB/shell-uid (pm, cmd, settings, input/am automation, read " +
-    "anything); root = full root. Use it to inspect the device, run scripts, automate other apps " +
-    "(shizuku/root), and run quick commands. Each command needs the user's confirmation.",
+    "Run a shell command on the device (stdout/stderr/exit). Privilege is fixed by the Execution mode in your " +
+    "instructions (app=sandbox toybox; shizuku=ADB-uid: pm/cmd/settings/input-am/read-anything; root=full). " +
+    "Inspect the device, run scripts, automate apps. Needs confirmation.",
   parameters: {
     type: "object",
     properties: {
@@ -593,17 +560,27 @@ const SHELL_TOOL: FunctionDeclaration = {
 const TERMUX_TOOL: FunctionDeclaration = {
   name: "run_termux",
   description:
-    "Run a command inside Termux — the real local toolchain (python, node, clang, git, make, etc., " +
-    "whatever the user has `pkg install`ed). Use this (NOT run_shell) to build, run and TEST actual code: " +
-    "e.g. 'cd ~/proj && npm test', 'python main.py', 'gcc a.c -o a && ./a', 'git clone … && cd … && git " +
-    "checkout -b fix'. Requires the user to have Termux installed with allow-external-apps=true; output is " +
-    "captured and returned (reading it back needs Shizuku or root). Needs the user's confirmation.",
+    "Run a command in Termux — the real toolchain (python/node/clang/git/make). Use this (NOT run_shell) to " +
+    "build/run/TEST code, e.g. 'cd ~/proj && npm test'. Persistent session (cd/env carry over); output " +
+    "captured (read_log for more). Needs Termux w/ allow-external-apps. Needs confirmation.",
   parameters: {
     type: "object",
     properties: {
       command: { type: "string", description: "The command line to run inside Termux (bash -c)." },
     },
     required: ["command"],
+  },
+};
+
+// Offered only when notification access is granted (errors otherwise).
+const NOTIF_TOOL: FunctionDeclaration = {
+  name: "read_notifications",
+  description:
+    "Read recent incoming notifications (app, title, text, time) to triage/summarise what's arrived ('what " +
+    "did I miss?').",
+  parameters: {
+    type: "object",
+    properties: { limit: { type: "integer", description: "How many to read (default 30)." } },
   },
 };
 
@@ -614,10 +591,8 @@ const UI_TOOLS: FunctionDeclaration[] = [
   {
     name: "ui_screen",
     description:
-      "Read the CURRENT screen via accessibility — returns the on-screen elements (their text, " +
-      "content-description, resource-id, whether they're clickable/editable, and centre coordinates). " +
-      "Call this to see what's on screen before tapping/typing, and again after each action to confirm the " +
-      "new state. Works on whatever app is in the foreground.",
+      "Read the current screen's elements (text, content-desc, resource-id, clickable/editable, centre coords) " +
+      "via accessibility. Call before tapping/typing and again after each action to confirm the new state.",
     parameters: { type: "object", properties: {} },
   },
   {
@@ -656,9 +631,8 @@ const UI_TOOLS: FunctionDeclaration[] = [
 const READ_LOG_TOOL: FunctionDeclaration = {
   name: "read_log",
   description:
-    "Read the full output of the last run_termux/apply_patch command (un-truncated). The first view shows " +
-    "the start plus the end (where errors usually are); pass offset (from a previous readMoreOffset) to read " +
-    "the middle. Use this when output was truncated or a command was still running.",
+    "Read the full (un-truncated) output of the last run_termux/apply_patch. First view = start + end; pass " +
+    "offset (from readMoreOffset) for the middle. Use when output was truncated or still running.",
   parameters: {
     type: "object",
     properties: { offset: { type: "integer", description: "Character offset to read from (default 0)." } },
@@ -668,10 +642,8 @@ const READ_LOG_TOOL: FunctionDeclaration = {
 const APPLY_PATCH_TOOL: FunctionDeclaration = {
   name: "apply_patch",
   description:
-    "Apply a unified git diff to files in the current Termux session directory (surgical edit — far better " +
-    "than rewriting whole files). Provide a standard `git diff` (--- a/… / +++ b/… / @@ hunks). Runs `git " +
-    "apply` and returns success or the rejected-hunk errors so you can correct the diff. cd to the repo first " +
-    "with run_termux. Needs the user's confirmation.",
+    "Apply a unified git diff to files in the current Termux session dir (surgical, better than rewriting " +
+    "files). Runs `git apply`; rejected hunks come back so you can fix the diff. cd to the repo first. Needs confirmation.",
   parameters: {
     type: "object",
     properties: { diff: { type: "string", description: "Unified diff text to apply." } },
@@ -1812,6 +1784,7 @@ export async function runAgentTurn(
   if (execMode === "termux" || execMode === "shizuku" || execMode === "root")
     builtins.push(TERMUX_TOOL, READ_LOG_TOOL, APPLY_PATCH_TOOL);
   if (Shell.a11yEnabled()) builtins.push(...UI_TOOLS);
+  if (Shell.notificationsEnabled()) builtins.push(NOTIF_TOOL);
   try {
     await McpClient.ensureConnections();
     const mcp = McpClient.getMcpToolDeclarations();
