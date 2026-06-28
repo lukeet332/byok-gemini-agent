@@ -36,6 +36,11 @@ const GITHUB_KEY = "GITHUB_TOKEN";
 // Keep an agent turn running when the app is backgrounded (Android foreground
 // service; iOS best-effort grace period). "" / "1" = on (default), "0" = off.
 const BACKGROUND_KEY = "BACKGROUND_RUN";
+// Pro mode: for users on paid/higher limits — spend more tokens/requests for
+// depth & reliability (more tool rounds, bigger context caps, less-lossy memory,
+// more thorough behaviour). "1" = on, else off (default).
+const PRO_MODE_KEY = "PRO_MODE";
+
 // Single execution backend the AI uses for running code/commands (so it's never
 // ambiguous which to use). Default "off" (GitHub-only, no on-device execution).
 //   off     — no shell/termux tools; edit via GitHub.
@@ -229,6 +234,16 @@ export async function getBackgroundRun(): Promise<boolean> {
 
 export async function saveBackgroundRun(on: boolean): Promise<void> {
   await SecureStore.setItemAsync(BACKGROUND_KEY, on ? "1" : "0");
+}
+
+// ---- Pro mode (default: off) ----
+
+export async function getProMode(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(PRO_MODE_KEY)) === "1";
+}
+
+export async function saveProMode(on: boolean): Promise<void> {
+  await SecureStore.setItemAsync(PRO_MODE_KEY, on ? "1" : "0");
 }
 
 // ---- First-run permission bootstrap (request runtime perms once) ----

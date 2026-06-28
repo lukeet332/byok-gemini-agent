@@ -33,7 +33,7 @@ import {
 
 import { AbortedError, compactConversation, runAgentTurn, stripLeadingTitle } from "../agent/GeminiAgent";
 import { notifyTurnDone } from "../agent/Background";
-import { getBackgroundRun, getConfirmSystemActions } from "../storage/SecureStorage";
+import { getBackgroundRun, getConfirmSystemActions, getProMode } from "../storage/SecureStorage";
 import McpServersModal from "./McpServersModal";
 import {
   COMPACT_THRESHOLD_CHARS,
@@ -220,6 +220,8 @@ export default function ChatScreen({
   const backgroundRunRef = useRef(true);
   // Always confirm Shizuku/root commands, even in Auto mode (safety rail).
   const confirmSystemRef = useRef(true);
+  // Pro mode keeps more conversation verbatim (less-lossy compaction).
+  const proModeRef = useRef(false);
   // Last turn left a user message unanswered (interrupted) → offer to continue.
   const [needsResume, setNeedsResume] = useState(false);
   // True when the pending message was dictated (so we read the reply aloud).
@@ -246,6 +248,9 @@ export default function ChatScreen({
     });
     getConfirmSystemActions().then((v) => {
       confirmSystemRef.current = v;
+    });
+    getProMode().then((v) => {
+      proModeRef.current = v;
     });
   }, []);
 
@@ -554,7 +559,7 @@ export default function ChatScreen({
       );
 
       let updated: Thread = { ...thread, contents: result.contents, updatedAt: Date.now() };
-      if (historySize(updated.contents) > COMPACT_THRESHOLD_CHARS) {
+      if (historySize(updated.contents) > (proModeRef.current ? COMPACT_THRESHOLD_CHARS * 2 : COMPACT_THRESHOLD_CHARS)) {
         const split = safeSplit(updated.contents);
         if (split > 0) {
           setStatus("Compacting memory...");

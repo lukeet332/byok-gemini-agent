@@ -17,6 +17,7 @@ import {
   getModel,
   getOpenAiConfig,
   getExecMode,
+  getProMode,
   getProvider,
   getSecretValue,
   getSystemPrompt,
@@ -101,6 +102,11 @@ const MAX_SEARCH_CHARS = 8000;
 // forever. Stream: max gap between chunks. Non-stream: total request deadline.
 const STREAM_STALL_MS = 30000;
 const REQUEST_TIMEOUT_MS = 90000;
+
+// Pro mode (set per turn from settings): trade tokens for depth. Scales the
+// tool-output caps and tool-round ceiling, and adds a thoroughness directive.
+let proMode = false;
+const proCap = (base: number) => (proMode ? base * 2 : base);
 
 // Present as a real browser so naive user-agent blocks don't reject http_request.
 const BROWSER_UA =
@@ -1059,11 +1065,12 @@ async function executeHttpRequest(
   try {
     const res = await fetch(url, init);
     const text = await res.text();
-    const truncated = text.length > MAX_API_CHARS;
+    const apiMax = proCap(MAX_API_CHARS);
+    const truncated = text.length > apiMax;
     return {
       ok: res.ok,
       status: res.status,
-      body: truncated ? text.slice(0, MAX_API_CHARS) + "\n...[truncated]" : text,
+      body: truncated ? text.slice(0, apiMax) + "\n...[truncated]" : text,
     };
   } catch (err) {
     return { ok: false, error: `Network error: ${String(err)}` };
@@ -1080,10 +1087,11 @@ async function executeFetchWebpage(
   if (!url) return { ok: false, error: "Missing url." };
   if (signal?.aborted) throw new AbortedError();
   const offset = typeof args.offset === "number" && args.offset > 0 ? Math.floor(args.offset) : 0;
+  const pageMax = proCap(MAX_PAGE_CHARS);
   const page = (t: string) => {
-    const slice = t.slice(offset, offset + MAX_PAGE_CHARS);
-    const more = t.length > offset + MAX_PAGE_CHARS;
-    return more ? slice + `\n...[more — call again with offset ${offset + MAX_PAGE_CHARS}]` : slice;
+    const slice = t.slice(offset, offset + pageMax);
+    const more = t.length > offset + pageMax;
+    return more ? slice + `\n...[more — call again with offset ${offset + pageMax}]` : slice;
   };
 
   const r = await BrowserEngine.fetchPage(url, { signal });
@@ -1203,6 +1211,10 @@ async function buildSystemInstruction(memo?: string, requestTitle = false): Prom
 
   const timeBlock = `\n\nCurrent local time: ${new Date().toString()}. Use this for any date/time reasoning. To set reminders/alarms/nudges, use schedule_reminder (compute the ISO 'at' from this time, or pass inMinutes).`;
 
+  const proBlock = proMode
+    ? "\n\nPRO MODE is ON — the user has higher limits, so favour depth & reliability over saving tokens: search and CROSS-CHECK multiple sources, read pages fully (page deeper with offsets), chain as many tool steps as needed, retry failed tools, and verify before answering. Don't cut corners or give a quick guess when you can do the thorough job."
+    : "";
+
   // First message of a new chat: have the model name the thread inline (no extra
   // request) — the app strips this line before showing the reply.
   const titleBlock = requestTitle
@@ -1214,7 +1226,7 @@ async function buildSystemInstruction(memo?: string, requestTitle = false): Prom
     parts: [
       {
         text:
-          base + timeBlock + titleBlock + secretsLine + shellLine + a11yLine + notifLine + mcpLine + notesBlock + memoryBlock + memoBlock,
+          base + proBlock + timeBlock + titleBlock + secretsLine + shellLine + a11yLine + notifLine + mcpLine + notesBlock + memoryBlock + memoBlock,
       },
     ],
   };
@@ -1856,6 +1868,8 @@ export async function runAgentTurn(
   const history: Content[] = [...contents];
   const setStatus = callbacks.onStatus ?? (() => {});
   const signal = callbacks.signal;
+  proMode = await getProMode().catch(() => false);
+  const maxRounds = proMode ? 24 : MAX_TOOL_ROUNDS;
   // Merge connected MCP servers' tools into this turn's tool set (before building
   // the prompt, so it can name the live integrations).
   const execMode = await getExecMode().catch(() => "off" as const);
@@ -1877,7 +1891,7 @@ export async function runAgentTurn(
   const secrets = await collectSecretValues();
   const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+  for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) throw new AbortedError();
     setStatus("Thinking...");
     // Route to the configured backend (Gemini streams; others are single-shot).

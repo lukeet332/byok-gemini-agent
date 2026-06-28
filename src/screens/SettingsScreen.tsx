@@ -30,6 +30,7 @@ import {
   getGithubToken,
   getModel,
   getOpenAiConfig,
+  getProMode,
   getProvider,
   getSystemPrompt,
   getWriteMode,
@@ -44,6 +45,7 @@ import {
   saveGithubToken,
   saveModel,
   saveOpenAiConfig,
+  saveProMode,
   saveProvider,
   saveSystemPrompt,
   saveWriteMode,
@@ -132,6 +134,7 @@ export default function SettingsScreen() {
   const [openaiModel, setOpenaiModel] = useState("");
   const [backgroundRun, setBackgroundRunState] = useState(true);
   const [execMode, setExecModeState] = useState<ExecMode>("off");
+  const [proMode, setProModeState] = useState(false);
   const [confirmSystem, setConfirmSystemState] = useState(true);
 
   // Latest form values + a "loaded" flag, so we can auto-save on leave (a cleanup
@@ -188,6 +191,7 @@ export default function SettingsScreen() {
       setAnthropicModel(an.model);
       setBackgroundRunState(await getBackgroundRun());
       setExecModeState(await getExecMode());
+      setProModeState(await getProMode());
       setConfirmSystemState(await getConfirmSystemActions());
       setShizuku(await shizukuStatus());
       setA11yOn(a11yEnabled());
@@ -251,6 +255,10 @@ export default function SettingsScreen() {
   function pickExecMode(m: ExecMode) {
     setExecModeState(m);
     void saveExecMode(m);
+  }
+  function toggleProMode(v: boolean) {
+    setProModeState(v);
+    void saveProMode(v);
   }
   function toggleConfirmSystem(v: boolean) {
     setConfirmSystemState(v);
@@ -539,6 +547,23 @@ export default function SettingsScreen() {
             </View>
           </TouchableOpacity>
         </Modal>
+
+        <Text style={styles.sectionLabel}>Pro mode</Text>
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleTextWrap}>
+            <Text style={styles.toggleName}>Pro mode</Text>
+            <Text style={styles.hint}>
+              For paid / higher limits — spends more to act more like a full agent: more tool steps, fuller
+              context from pages & APIs, less-lossy memory, and more thorough, cross-checked answers.
+            </Text>
+          </View>
+          <Switch
+            value={proMode}
+            onValueChange={toggleProMode}
+            trackColor={{ false: theme.border, true: theme.accent }}
+            thumbColor={theme.text}
+          />
+        </View>
 
         <Text style={styles.sectionLabel}>Background</Text>
         <View style={styles.toggleRow}>

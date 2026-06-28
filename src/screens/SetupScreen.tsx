@@ -11,6 +11,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -35,10 +36,12 @@ import {
   AiProvider,
   ExecMode,
   getExecMode,
+  getProMode,
   saveAnthropicConfig,
   saveExecMode,
   saveGeminiKey,
   saveOpenAiConfig,
+  saveProMode,
   saveProvider,
 } from "../storage/SecureStorage";
 import { theme } from "../theme";
@@ -65,6 +68,7 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState("");
   const [saving, setSaving] = useState(false);
+  const [proMode, setProMode] = useState(false);
   const [autoOn, setAutoOn] = useState(a11yEnabled());
   // Optional developer setup.
   const [devOpen, setDevOpen] = useState(false);
@@ -82,6 +86,7 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     getExecMode().then(setExecMode);
+    getProMode().then(setProMode);
     refreshStatuses();
     // Re-read permission statuses when returning from system settings.
     const sub = AppState.addEventListener("change", (s) => {
@@ -223,6 +228,25 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
             />
           </View>
         )}
+
+        <View style={styles.proRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.label}>Pro mode</Text>
+            <Text style={styles.hint}>
+              For paid / higher limits — spends more for depth: more tool steps, fuller context, less-lossy
+              memory, more thorough answers. You can change this later in Settings.
+            </Text>
+          </View>
+          <Switch
+            value={proMode}
+            onValueChange={(v) => {
+              setProMode(v);
+              void saveProMode(v);
+            }}
+            trackColor={{ false: theme.border, true: theme.accent }}
+            thumbColor={theme.text}
+          />
+        </View>
 
         <Text style={styles.label}>Screen automation (optional)</Text>
         <Text style={styles.hint}>Let Fraude tap & type in other apps (e.g. send a WhatsApp). Optional — enable any time in Settings.</Text>
@@ -378,6 +402,7 @@ const styles = StyleSheet.create({
   autoBtnOnText: { color: theme.bg, fontWeight: "700", fontSize: 13 },
   autoStatus: { color: theme.textDim, fontSize: 13 },
   subhint: { color: theme.textDim, fontSize: 12, marginTop: 6, lineHeight: 17 },
+  proRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 22 },
   accordionHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 22 },
   accordionChevron: { color: theme.textDim, fontSize: 16 },
   smallLabel: { color: theme.text, fontSize: 14, fontWeight: "700", marginTop: 16, marginBottom: 4 },
