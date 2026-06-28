@@ -4,7 +4,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   FlatList,
   ListRenderItemInfo,
@@ -74,6 +73,8 @@ export default function ThreadListScreen({ onOpen, onNew, onRunRoutine }: Props)
   const [addOpen, setAddOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPrompt, setNewPrompt] = useState("");
+  // Themed confirm dialog (matches the chat action-approval modal).
+  const [confirm, setConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
 
   async function reload() {
     setThreads(await listThreads());
@@ -94,17 +95,14 @@ export default function ThreadListScreen({ onOpen, onNew, onRunRoutine }: Props)
   }
 
   function confirmDeleteRoutine(r: Routine) {
-    Alert.alert("Delete routine", `Remove “${r.name}”?`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          await deleteRoutine(r.id);
-          setRoutines(await listRoutines());
-        },
+    setConfirm({
+      title: "Delete routine",
+      message: `Remove “${r.name}”?`,
+      onConfirm: async () => {
+        await deleteRoutine(r.id);
+        setRoutines(await listRoutines());
       },
-    ]);
+    });
   }
 
   async function onDelete(id: string) {
@@ -113,10 +111,11 @@ export default function ThreadListScreen({ onOpen, onNew, onRunRoutine }: Props)
   }
 
   function confirmDeleteThread(t: ThreadMeta) {
-    Alert.alert("Delete chat", `Delete “${t.title}”? This can’t be undone.`, [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: () => onDelete(t.id) },
-    ]);
+    setConfirm({
+      title: "Delete chat",
+      message: `Delete “${t.title}”? This can’t be undone.`,
+      onConfirm: () => onDelete(t.id),
+    });
   }
 
   function renderItem({ item }: ListRenderItemInfo<ThreadMeta>) {
@@ -149,6 +148,7 @@ export default function ThreadListScreen({ onOpen, onNew, onRunRoutine }: Props)
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.routinesScroll}
         contentContainerStyle={styles.routines}
         keyboardShouldPersistTaps="handled"
       >
@@ -176,6 +176,7 @@ export default function ThreadListScreen({ onOpen, onNew, onRunRoutine }: Props)
           data={threads}
           keyExtractor={(t) => t.id}
           renderItem={renderItem}
+          style={styles.listFlex}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
             <View style={styles.center}>
@@ -216,6 +217,30 @@ export default function ThreadListScreen({ onOpen, onNew, onRunRoutine }: Props)
           </View>
         </TouchableOpacity>
       </Modal>
+
+      <Modal visible={!!confirm} transparent animationType="fade" onRequestClose={() => setConfirm(null)}>
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>{confirm?.title}</Text>
+            <Text style={styles.confirmDetail}>{confirm?.message}</Text>
+            <View style={styles.confirmActions}>
+              <TouchableOpacity style={styles.confirmDecline} onPress={() => setConfirm(null)}>
+                <Text style={styles.confirmDeclineText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.confirmAllow, styles.confirmAllowDanger]}
+                onPress={() => {
+                  const fn = confirm?.onConfirm;
+                  setConfirm(null);
+                  fn?.();
+                }}
+              >
+                <Text style={styles.confirmAllowDangerText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -233,15 +258,23 @@ const styles = StyleSheet.create({
   title: { color: theme.text, fontSize: 28, fontWeight: "700" },
   newBtn: { backgroundColor: theme.accent, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9 },
   newText: { color: theme.bg, fontWeight: "700", fontSize: 14 },
+  listFlex: { flex: 1 },
   list: { paddingHorizontal: 16, paddingBottom: 24, flexGrow: 1 },
-  routines: { paddingHorizontal: 16, paddingBottom: 8, gap: 8, alignItems: "center" },
+  // Keep the chips row at its natural height — without this the horizontal
+  // ScrollView competes with the list for vertical space and gets crushed,
+  // squashing the chips (and their text).
+  routinesScroll: { flexGrow: 0, flexShrink: 0 },
+  routines: { paddingHorizontal: 16, paddingVertical: 4, gap: 8, alignItems: "center" },
   routineChip: {
+    minHeight: 36,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 16,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: theme.border,
     backgroundColor: theme.surface,
+    justifyContent: "center",
+    alignItems: "center",
   },
   routineText: { color: theme.text, fontSize: 13, fontWeight: "600" },
   routineAdd: { borderColor: theme.accent, borderStyle: "dashed" },
@@ -287,6 +320,23 @@ const styles = StyleSheet.create({
   rowTime: { color: theme.textDim, fontSize: 12, marginTop: 3 },
   del: { paddingHorizontal: 14, paddingVertical: 14 },
   delText: { color: theme.danger, fontSize: 13, fontWeight: "600" },
+  confirmOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: 22 },
+  confirmCard: { backgroundColor: theme.surface, borderRadius: 18, borderWidth: 1, borderColor: theme.border, padding: 18 },
+  confirmTitle: { color: theme.text, fontSize: 18, fontWeight: "800" },
+  confirmDetail: { color: theme.textDim, fontSize: 14, marginTop: 6, marginBottom: 14, lineHeight: 20 },
+  confirmActions: { flexDirection: "row", gap: 10 },
+  confirmDecline: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.border,
+    alignItems: "center",
+  },
+  confirmDeclineText: { color: theme.textDim, fontSize: 15, fontWeight: "700" },
+  confirmAllow: { flex: 1, paddingVertical: 13, borderRadius: 12, alignItems: "center" },
+  confirmAllowDanger: { backgroundColor: theme.danger },
+  confirmAllowDangerText: { color: "#fff", fontSize: 15, fontWeight: "800" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   empty: { color: theme.text, fontSize: 16, fontWeight: "600" },
   emptyHint: { color: theme.textDim, fontSize: 14, marginTop: 6 },

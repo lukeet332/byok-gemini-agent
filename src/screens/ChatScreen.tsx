@@ -775,13 +775,13 @@ export default function ChatScreen({
       return (
         <View style={[styles.bubble, styles.userBubble, styles.alignRight]}>
           {item.imageUri ? <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" /> : null}
-          {item.text ? <Text style={styles.userText}>{item.text}</Text> : null}
+          {item.text ? <Text style={styles.userText} selectable>{item.text}</Text> : null}
         </View>
       );
     }
     const isLast = item.id === messages[messages.length - 1]?.id;
     return (
-      <View style={[styles.bubble, styles.modelBubble, styles.alignLeft]}>
+      <View style={[styles.bubble, styles.modelBubble]}>
         {item.imageUri ? <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" /> : null}
         <Markdown style={mdStyles} rules={mdRules}>
           {withInlineImages(item.text)}
@@ -828,8 +828,8 @@ export default function ChatScreen({
         onContentSizeChange={scrollToEnd}
         ListFooterComponent={
           displayed !== "" ? (
-            <View style={[styles.bubble, styles.modelBubble, styles.alignLeft]}>
-              <Text style={styles.modelText}>{displayed}</Text>
+            <View style={[styles.bubble, styles.modelBubble]}>
+              <Text style={styles.modelText} selectable>{displayed}</Text>
             </View>
           ) : null
         }
@@ -1080,6 +1080,25 @@ export default function ChatScreen({
 
 // Inline images inside model markdown.
 const mdRules = {
+  // Render text as selectable so users can highlight/copy from replies (the
+  // library's default Text isn't selectable). Preserve nested inline styles
+  // (bold/italic/links) by keeping inheritedStyles + the base text style.
+  text: (
+    node: { key: string; content: string },
+    _children: unknown,
+    _parent: unknown,
+    mdS: { text?: object },
+    inheritedStyles: object = {}
+  ) => (
+    <Text key={node.key} style={[inheritedStyles, mdS.text]} selectable>
+      {node.content}
+    </Text>
+  ),
+  textgroup: (node: { key: string }, children: React.ReactNode, _parent: unknown, mdS: { textgroup?: object }) => (
+    <Text key={node.key} style={mdS.textgroup} selectable>
+      {children}
+    </Text>
+  ),
   image: (node: { key: string; attributes: { src?: string } }) => (
     <Image
       key={node.key}
@@ -1107,7 +1126,7 @@ const mdRules = {
                       ? styles.diffHunk
                       : null;
               return (
-                <Text key={i} style={[styles.codeText, style]}>
+                <Text key={i} style={[styles.codeText, style]} selectable>
                   {ln.length ? ln : " "}
                 </Text>
               );
@@ -1118,13 +1137,13 @@ const mdRules = {
     }
     return (
       <ScrollView key={node.key} horizontal showsHorizontalScrollIndicator={false} style={styles.codeBlock} contentContainerStyle={styles.codeBlockInner}>
-        <Text style={styles.codeText}>{node.content}</Text>
+        <Text style={styles.codeText} selectable>{node.content}</Text>
       </ScrollView>
     );
   },
   code_block: (node: { key: string; content: string }) => (
     <ScrollView key={node.key} horizontal showsHorizontalScrollIndicator={false} style={styles.codeBlock} contentContainerStyle={styles.codeBlockInner}>
-      <Text style={styles.codeText}>{node.content}</Text>
+      <Text style={styles.codeText} selectable>{node.content}</Text>
     </ScrollView>
   ),
 };
@@ -1146,10 +1165,17 @@ const styles = StyleSheet.create({
   alignRight: { alignSelf: "flex-end", borderBottomRightRadius: 4 },
   alignLeft: { alignSelf: "flex-start", borderBottomLeftRadius: 4 },
   userBubble: { backgroundColor: theme.userBubble, paddingVertical: 10 },
-  // Definite width (not shrink-to-fit): markdown lists report min-content width
-  // (the longest word), so a shrink-wrapped bubble collapses to one word per
-  // line. A fixed width gives the content room to lay out normally.
-  modelBubble: { width: "86%", backgroundColor: theme.modelBubble, borderWidth: 1, borderColor: theme.border },
+  // Stretch to a definite width (capped at the shared bubble maxWidth, 86%, so it
+  // matches the sender bubbles) rather than shrink-to-fit. The definite width lets
+  // markdown lists/tables/code lay out — a shrink-wrapped bubble collapses them to
+  // one word per line. Left-aligned; user messages hug right (see alignRight).
+  modelBubble: {
+    alignSelf: "stretch",
+    backgroundColor: theme.modelBubble,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderBottomLeftRadius: 4,
+  },
   userText: { color: theme.userBubbleText, fontSize: 15, lineHeight: 21 },
   modelText: { color: theme.text, fontSize: 15, lineHeight: 21 },
   attachImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 6 },
@@ -1338,11 +1364,12 @@ const mdStyles = StyleSheet.create({
   link: { color: theme.accent, textDecorationLine: "underline" },
   bullet_list: { marginVertical: 4 },
   ordered_list: { marginVertical: 4 },
-  // list_item is a row [marker][content]; the content MUST flex or each
-  // character wraps to its own line and the bubble collapses.
+  // list_item is a row [marker][content]: content flexes to fill, marker never
+  // shrinks. Works because model bubbles fill the row width (see modelBubble) —
+  // a shrink-to-fit bubble would collapse the list to one word per line.
   list_item: { flexDirection: "row", justifyContent: "flex-start", marginVertical: 2 },
-  bullet_list_icon: { color: theme.accent, marginRight: 6 },
-  ordered_list_icon: { color: theme.accent, marginRight: 6 },
+  bullet_list_icon: { color: theme.accent, marginRight: 6, flexShrink: 0 },
+  ordered_list_icon: { color: theme.accent, marginRight: 6, flexShrink: 0 },
   bullet_list_content: { flex: 1, color: theme.text },
   ordered_list_content: { flex: 1, color: theme.text },
   code_inline: {
