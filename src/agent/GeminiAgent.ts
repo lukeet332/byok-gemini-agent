@@ -97,6 +97,10 @@ const MAX_TOOL_ROUNDS = 12;
 const MAX_API_CHARS = 8000;
 const MAX_PAGE_CHARS = 16000;
 const MAX_SEARCH_CHARS = 8000;
+// Bound model requests so a stalled stream/connection can't hang "Thinking…"
+// forever. Stream: max gap between chunks. Non-stream: total request deadline.
+const STREAM_STALL_MS = 30000;
+const REQUEST_TIMEOUT_MS = 90000;
 
 // Present as a real browser so naive user-agent blocks don't reject http_request.
 const BROWSER_UA =
@@ -1221,16 +1225,25 @@ async function callGemini(
   if (withTools) payload.tools = activeTools;
 
   let res: Response;
+  // Combine the caller's abort with a hard request deadline so the call can't
+  // hang forever if the connection stalls.
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (signal) signal.addEventListener("abort", onAbort);
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      signal,
+      signal: controller.signal,
     });
   } catch (e) {
     if (signal?.aborted) throw new AbortedError();
     throw new Error(`Network error: ${String(e)}`);
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", onAbort);
   }
   const data = (await res.json().catch(() => ({}))) as GeminiResponse;
   if (!res.ok) throw new Error(data.error?.message ?? `Gemini request failed (${res.status}).`);
@@ -1257,12 +1270,23 @@ async function streamModelTurn(
   const url = `${GEMINI_BASE}${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
   const body = JSON.stringify({ contents, tools: activeTools, systemInstruction });
 
-  const res = await expoFetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-    signal,
-  });
+  let connectTimer: ReturnType<typeof setTimeout> | undefined;
+  let res: Awaited<ReturnType<typeof expoFetch>>;
+  try {
+    res = await Promise.race([
+      expoFetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal,
+      }),
+      new Promise<never>((_, reject) => {
+        connectTimer = setTimeout(() => reject(new Error("STREAM_CONNECT_TIMEOUT")), REQUEST_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(connectTimer);
+  }
   if (!res.ok) {
     const t = await res.text().catch(() => "");
     throw new Error(`Stream failed (${res.status}). ${t.slice(0, 200)}`);
@@ -1307,7 +1331,30 @@ async function streamModelTurn(
       }
       throw new AbortedError();
     }
-    const { done, value } = await reader.read();
+    // Bound each read: if the stream stalls (no chunk within STREAM_STALL_MS),
+    // give up so the turn can't hang forever — callModel then falls back to the
+    // non-streaming request (a single bounded call, no retry storm).
+    let result: Awaited<ReturnType<typeof reader.read>>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      result = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("STREAM_STALL")), STREAM_STALL_MS);
+        }),
+      ]);
+    } catch (e) {
+      clearTimeout(timer);
+      try {
+        await reader.cancel();
+      } catch {
+        // ignore
+      }
+      if (signal?.aborted) throw new AbortedError();
+      throw new Error("Stream stalled — falling back.");
+    }
+    clearTimeout(timer);
+    const { done, value } = result;
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     let nl: number;
