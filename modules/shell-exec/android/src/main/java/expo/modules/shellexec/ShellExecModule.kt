@@ -159,6 +159,18 @@ class ShellExecModule : Module() {
       true
     }
 
+    // Open this app's App-info page — where Android 13+ requires the user to tap
+    // ⋮ → "Allow restricted settings" before a sideloaded app's accessibility
+    // toggle can be turned on.
+    Function("openAppInfo") {
+      val ctx = appContext.reactContext ?: return@Function false
+      val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+        .setData(Uri.parse("package:${ctx.packageName}"))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      ctx.startActivity(intent)
+      true
+    }
+
     // Read the current screen (node tree) so the AI can decide what to act on.
     AsyncFunction("a11yDump") {
       FraudeAccessibilityService.instance?.dump() ?: "Accessibility service not enabled. Turn it on in Settings → Advanced mode."

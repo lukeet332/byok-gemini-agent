@@ -58,6 +58,7 @@ import {
   linuxTerminalStatus,
   LinuxTerminalStatus,
   openA11ySettings,
+  openAppInfo,
   openLinuxTerminal,
   requestAllFilesAccess,
   requestShizukuPermission,
@@ -528,9 +529,19 @@ export default function SettingsScreen() {
           with a drafted message and press send). App-agnostic; no root needed. Status:{" "}
           {a11yOn ? "enabled ✓" : "off"}.
         </Text>
+        {!a11yOn ? (
+          <Text style={[styles.hint, { marginTop: 6 }]}>
+            ⚠️ If the Accessibility toggle is greyed out or says “Restricted setting” (normal for apps installed
+            outside the Play Store on Android 13+): open App info → ⋮ menu (top-right) → “Allow restricted
+            settings”, then turn Fraude on in Accessibility.
+          </Text>
+        ) : null}
         <View style={styles.advButtons}>
           <TouchableOpacity style={styles.advBtn} onPress={() => openA11ySettings()}>
             <Text style={styles.advBtnText}>{a11yOn ? "Accessibility settings" : "Enable screen automation"}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.advBtn} onPress={() => openAppInfo()}>
+            <Text style={styles.advBtnText}>App info (allow restricted)</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.advBtn} onPress={() => setA11yOn(a11yEnabled())}>
             <Text style={styles.advBtnText}>Refresh</Text>

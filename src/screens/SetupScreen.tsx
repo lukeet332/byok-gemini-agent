@@ -17,7 +17,7 @@ import {
 } from "react-native";
 
 import { OPENAI_PRESETS } from "../agent/GeminiAgent";
-import { a11yEnabled, openA11ySettings } from "../../modules/shell-exec";
+import { a11yEnabled, openA11ySettings, openAppInfo } from "../../modules/shell-exec";
 import {
   AiProvider,
   saveAnthropicConfig,
@@ -176,10 +176,15 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
         <Text style={styles.hint}>
           Let Fraude operate your phone — drive any app to, say, open WhatsApp with a drafted message and press
           send. Turn on Fraude in Accessibility settings. You can skip this and enable it later in Settings.
+          {"\n\n"}If the toggle is greyed out / “Restricted setting” (normal for sideloaded apps on Android 13+):
+          open App info → ⋮ (top-right) → “Allow restricted settings” first, then enable it.
         </Text>
         <View style={styles.autoRow}>
           <TouchableOpacity style={styles.autoBtn} onPress={() => openA11ySettings()}>
             <Text style={styles.autoBtnText}>{autoOn ? "Accessibility settings" : "Enable automation"}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.autoBtn} onPress={() => openAppInfo()}>
+            <Text style={styles.autoBtnText}>App info</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.autoBtn} onPress={() => setAutoOn(a11yEnabled())}>
             <Text style={styles.autoBtnText}>Refresh</Text>

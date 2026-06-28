@@ -25,6 +25,7 @@ interface NativeShell {
   runTermux: (commandLine: string) => Promise<{ ok: boolean; error?: string }>;
   a11yEnabled: () => boolean;
   openA11ySettings: () => boolean;
+  openAppInfo: () => boolean;
   a11yDump: () => Promise<string>;
   a11yTapText: (text: string) => Promise<boolean>;
   a11yTapId: (id: string) => Promise<boolean>;
@@ -113,6 +114,14 @@ export function a11yEnabled(): boolean {
 export function openA11ySettings(): void {
   try {
     native?.openA11ySettings();
+  } catch {
+    // ignore
+  }
+}
+
+export function openAppInfo(): void {
+  try {
+    native?.openAppInfo();
   } catch {
     // ignore
   }
