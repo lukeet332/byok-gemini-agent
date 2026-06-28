@@ -114,7 +114,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "- http_request(method,url,headers,body): call ANY API. Authenticate by putting {{SECRET_NAME}} in the url/headers/body — values are substituted on-device; you never see them.",
   "- Device / other apps: check_app_available(url-or-scheme), open_link(url or deep link), share_content(text), clipboard_get(), clipboard_set(text), send_android_intent(...).",
   "- Files: grant_folder (one-time per folder), list_files(folderUri?), read_file(uri), write_file(uri,content), create_file(folderUri,name,content), pick_file. To find/edit a file in e.g. Downloads: list_files() to see granted folders; if none, call grant_folder and ask the user to pick Downloads; then list_files(uri), read_file, and write_file/create_file as needed.",
-  "- GitHub coding: github_list_path / github_get_file / github_search_code to read & answer questions about a repo (free), and github_commit to make changes. ALWAYS read the relevant files first, then github_commit with the FULL new content of each changed file (blobs replace the whole file) and a clear commit message. Commits honour the user's write mode (branch+PR by default) and need their confirmation.",
+  "- GitHub coding: github_list_path / github_get_file / github_search_code to read & answer questions about a repo (free). To EDIT, prefer github_apply_patch with a unified git diff — surgical, verifiable, works with no local toolchain; ALWAYS read the file first so the diff's context matches, and show the user the change as a ```diff block. Use github_commit (FULL new file content) only for new files or full rewrites. Both honour the user's write mode (branch+PR by default) and need confirmation.",
   "",
   "Acting on the phone: to use another app (e.g. send a WhatsApp message), FIRST check_app_available (e.g. 'whatsapp://'), then format that app's deep link yourself (e.g. https://wa.me/<number>?text=...) and open_link it, or use send_android_intent for advanced handoffs. Use clipboard_set to hand the user text to paste anywhere.",
   "",
@@ -431,6 +431,26 @@ export const TOOLS: Tool[] = [
             branch: { type: "string", description: "Optional branch name (used in branch mode)." },
           },
           required: ["repo", "message", "files"],
+        },
+      },
+      {
+        name: "github_apply_patch",
+        description:
+          "Make a SURGICAL edit to a GitHub repo by applying a unified git diff — preferred over github_commit " +
+          "for edits (no whole-file rewrite, works for everyone, no Termux). Provide a standard multi-file diff " +
+          "(diff --git a/… b/…, --- a/…, +++ b/…, @@ hunks). Fraude fetches each file, applies the hunks in-app, " +
+          "and commits per the user's write mode. If a hunk doesn't apply you'll get the failing files back — " +
+          "re-read them with github_get_file and regenerate the diff against their exact current contents. " +
+          "ALWAYS show the user the diff in a ```diff block when you do this. Needs confirmation.",
+        parameters: {
+          type: "object",
+          properties: {
+            repo: { type: "string", description: "owner/name" },
+            message: { type: "string", description: "Commit message (first line = title)." },
+            diff: { type: "string", description: "Unified git diff to apply (one or more files)." },
+            branch: { type: "string", description: "Optional branch name (used in branch mode)." },
+          },
+          required: ["repo", "message", "diff"],
         },
       },
     ],
@@ -827,6 +847,13 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     Github.getFile(String(args.repo ?? ""), String(args.path ?? ""), typeof args.ref === "string" ? args.ref : undefined),
   github_search_code: (args) =>
     Github.searchCode(String(args.query ?? ""), typeof args.repo === "string" ? args.repo : undefined),
+  github_apply_patch: (args) =>
+    Github.applyPatchAndCommit(
+      String(args.repo ?? ""),
+      String(args.message ?? ""),
+      String(args.diff ?? ""),
+      { branch: typeof args.branch === "string" ? args.branch : undefined }
+    ),
   github_commit: (args) =>
     Github.commitChangeset(
       String(args.repo ?? ""),
@@ -1572,6 +1599,7 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "github_list_path" || call.name === "github_get_file") return `Reading repo: ${String(call.args?.repo ?? "")}`;
   if (call.name === "github_search_code") return "Searching code...";
   if (call.name === "github_commit") return `Committing to ${String(call.args?.repo ?? "")}...`;
+  if (call.name === "github_apply_patch") return `Applying patch to ${String(call.args?.repo ?? "")}...`;
   return `Running tool: ${call.name}...`;
 }
 
@@ -1683,6 +1711,10 @@ export async function runAgentTurn(
           confirmMethod = "COMMIT";
           const n = Array.isArray(a.files) ? (a.files as unknown[]).length : 0;
           confirmUrl = `${String(a.repo ?? "")} · ${n} file(s)`;
+        } else if (call.name === "github_apply_patch") {
+          needsConfirm = true;
+          confirmMethod = "COMMIT";
+          confirmUrl = `${String(a.repo ?? "")} · patch`;
         }
         if (needsConfirm && callbacks.confirmWrite && !(await callbacks.confirmWrite({ method: confirmMethod, url: confirmUrl }))) {
           result = { ok: false, error: "The user declined this request. Do not retry it; ask them what to do instead." };

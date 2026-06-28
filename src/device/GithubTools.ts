@@ -2,6 +2,8 @@
 // No local clone: GitHub is the working copy. Reads are free; commits honour the
 // user's write mode (branch+PR / branch / main) and are confirm-gated upstream.
 
+import { applyPatch, parsePatch } from "diff";
+
 import { getGithubToken, getWriteMode } from "../storage/SecureStorage";
 
 const API = "https://api.github.com";
@@ -80,6 +82,76 @@ export async function searchCode(query: string, repo?: string): Promise<Record<s
 export interface FileChange {
   path: string;
   content: string;
+}
+
+// Fetch a file's FULL raw content (no truncation — needed for patching).
+async function fetchRaw(token: string, repo: string, path: string, ref?: string): Promise<string | null> {
+  const q = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+  const res = await fetch(`${API}/repos/${repo}/contents/${path}${q}`, {
+    headers: { ...authHeaders(token), Accept: "application/vnd.github.raw" },
+  });
+  if (!res.ok) return null;
+  return res.text();
+}
+
+// Surgical edit: apply a unified git diff (possibly multi-file) IN-APP and commit
+// the result. Works for everyone (no Termux/local clone). Fetches each file's
+// current content, applies the hunks with jsdiff, and commits via commitChangeset.
+export async function applyPatchAndCommit(
+  repo: string,
+  message: string,
+  diff: string,
+  opts: { branch?: string } = {}
+): Promise<Record<string, unknown>> {
+  const token = await getGithubToken();
+  if (!token) return { ok: false, error: "No GitHub token. Add it in Settings." };
+  if (!repo || !message || !diff?.trim()) return { ok: false, error: "Need repo, message, and a unified diff." };
+
+  let patches: ReturnType<typeof parsePatch>;
+  try {
+    patches = parsePatch(diff);
+  } catch (e) {
+    return { ok: false, error: `Couldn't parse the diff: ${String(e)}` };
+  }
+  if (!patches.length) return { ok: false, error: "No file patches found in the diff." };
+
+  const files: FileChange[] = [];
+  const failed: string[] = [];
+  for (const p of patches) {
+    const rawName =
+      p.newFileName && p.newFileName !== "/dev/null" ? p.newFileName : p.oldFileName ?? "";
+    const path = rawName.replace(/^[ab]\//, "").replace(/^\/+/, "").trim();
+    if (!path) {
+      failed.push("(unknown path)");
+      continue;
+    }
+    try {
+      const isNew = p.oldFileName === "/dev/null";
+      const current = isNew ? "" : (await fetchRaw(token, repo, path)) ?? "";
+      // A little fuzz tolerates minor context drift; false = hunks didn't match.
+      const patched = applyPatch(current, p, { fuzzFactor: 2 });
+      if (patched === false) {
+        failed.push(path);
+        continue;
+      }
+      files.push({ path, content: patched });
+    } catch (e) {
+      failed.push(`${path} (${String(e)})`);
+    }
+  }
+
+  if (!files.length) {
+    return {
+      ok: false,
+      error: `The patch didn't apply (files: ${failed.join(", ") || "none"}). Re-read the current file(s) with github_get_file and regenerate the diff against their exact contents.`,
+    };
+  }
+
+  const result = await commitChangeset(repo, message, files, opts);
+  if (result.ok && failed.length) {
+    (result as Record<string, unknown>).warning = `Committed ${files.length} file(s); these hunks did NOT apply: ${failed.join(", ")}`;
+  }
+  return result;
 }
 
 // Commit a set of files in ONE commit via the Git Data API, honouring write mode.
