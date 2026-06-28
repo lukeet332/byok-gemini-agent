@@ -68,7 +68,10 @@
           "photosPermission": "Allow Fraude to attach photos to your messages."
         }
       ],
-      "expo-notifications"
+      "expo-notifications",
+      ["expo-contacts", { "contactsPermission": "Allow Fraude to read your contacts to find people to message or call." }],
+      ["expo-calendar", { "calendarPermission": "Allow Fraude to read your calendar to help organise your day." }],
+      ["expo-location", { "locationWhenInUsePermission": "Allow Fraude to use your location for nearby / where-am-I tasks." }]
     ]
   }
 }

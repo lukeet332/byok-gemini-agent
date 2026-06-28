@@ -36,6 +36,7 @@ import * as Memory from "../storage/MemoryStore";
 import * as Background from "./Background";
 import { BrowserEngine } from "../browser/BrowserEngine";
 import * as Device from "../device/DeviceTools";
+import * as DeviceData from "../device/DeviceData";
 import * as Files from "../device/FileTools";
 import * as Github from "../device/GithubTools";
 import * as McpClient from "../mcp/McpClient";
@@ -115,6 +116,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "- fetch_webpage(url): read a specific page as clean text.",
   "- http_request(method,url,headers,body): call ANY API. Authenticate by putting {{SECRET_NAME}} in the url/headers/body — values are substituted on-device; you never see them.",
   "- Device / other apps: check_app_available(url-or-scheme), open_link(url or deep link), share_content(text), clipboard_get(), clipboard_set(text), send_android_intent(...).",
+  "- Personal data (organising): read_contacts(name) for a number/email, read_calendar(days) for what's on, get_location() for where-am-I/nearby, read_notifications() to triage what's arrived, schedule_reminder(...) for nudges/alarms. The OS asks permission the first time.",
   "- Files: grant_folder (one-time per folder), list_files(folderUri?), read_file(uri), write_file(uri,content), create_file(folderUri,name,content), pick_file. To find/edit a file in e.g. Downloads: list_files() to see granted folders; if none, call grant_folder and ask the user to pick Downloads; then list_files(uri), read_file, and write_file/create_file as needed.",
   "- GitHub coding: github_list_path / github_get_file / github_search_code to read & answer questions about a repo (free). To EDIT, prefer github_apply_patch with a unified git diff — surgical, verifiable, works with no local toolchain; ALWAYS read the file first so the diff's context matches, and show the user the change as a ```diff block. Use github_commit (FULL new file content) only for new files or full rewrites. Both honour the user's write mode (branch+PR by default) and need confirmation.",
   "",
@@ -330,6 +332,33 @@ export const TOOLS: Tool[] = [
           properties: { notes: { type: "string", description: "The full updated notes (markdown)." } },
           required: ["notes"],
         },
+      },
+      {
+        name: "read_contacts",
+        description:
+          "Look up the user's contacts by name (e.g. to find a number/email to message or call). Returns names " +
+          "with phone numbers + emails. Asks the OS for Contacts permission the first time.",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string", description: "Name (or part) to search for; empty = first contacts." } },
+        },
+      },
+      {
+        name: "read_calendar",
+        description:
+          "Read the user's upcoming calendar events (title, start, end, location) for the next N days — for " +
+          "'what's on today?', conflicts, scheduling. Asks for Calendar permission the first time.",
+        parameters: {
+          type: "object",
+          properties: { days: { type: "integer", description: "How many days ahead to read (default 7)." } },
+        },
+      },
+      {
+        name: "get_location",
+        description:
+          "Get the user's current location (lat/lng + a human-readable address) — for 'what's near me', " +
+          "travel/ETA, location-based reminders. Asks for Location permission the first time.",
+        parameters: { type: "object", properties: {} },
       },
       {
         name: "read_notifications",
@@ -885,6 +914,9 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     const ok = await Shell.a11yGlobal(String(args.action ?? ""));
     return ok ? { ok: true } : { ok: false, error: "action must be back, home, recents, or notifications." };
   },
+  read_contacts: (args) => DeviceData.readContacts(String(args.query ?? ""), 10),
+  read_calendar: (args) => DeviceData.readCalendar(typeof args.days === "number" ? args.days : 7),
+  get_location: () => DeviceData.getLocation(),
   read_notifications: async (args) => {
     if (!Shell.notificationsEnabled())
       return { ok: false, error: "Notification access is off. The user can enable it in Settings → Notification access." };
@@ -1733,6 +1765,9 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "write_file" || call.name === "create_file") return "Writing file...";
   if (call.name === "update_user_notes") return "Updating your notes...";
   if (call.name === "save_secret") return "Saving credential securely...";
+  if (call.name === "read_contacts") return "Looking up contacts...";
+  if (call.name === "read_calendar") return "Checking your calendar...";
+  if (call.name === "get_location") return "Getting your location...";
   if (call.name === "read_notifications") return "Reading notifications...";
   if (call.name === "schedule_reminder") return "Setting a reminder...";
   if (call.name === "list_reminders") return "Checking reminders...";
