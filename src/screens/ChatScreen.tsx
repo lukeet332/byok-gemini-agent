@@ -314,7 +314,27 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings }
     if (!perm.granted) return;
     setInput("");
     setListening(true);
-    ExpoSpeechRecognitionModule.start({ lang: "en-GB", interimResults: true });
+    // Prefer Google's high-quality cloud recognizer (free-form + punctuation)
+    // over the default/on-device engine, which is much less accurate.
+    let googleService: string | undefined;
+    try {
+      const services = ExpoSpeechRecognitionModule.getSpeechRecognitionServices();
+      googleService = services.find((s) => s.includes("googlequicksearchbox")) ?? services[0];
+    } catch {
+      // fall back to the default service
+    }
+    ExpoSpeechRecognitionModule.start({
+      lang: "en-GB",
+      interimResults: true,
+      continuous: false,
+      requiresOnDeviceRecognition: false, // use the network/Google recognizer
+      addsPunctuation: true,
+      androidRecognitionServicePackage: googleService,
+      androidIntentOptions: {
+        EXTRA_LANGUAGE_MODEL: "free_form",
+        EXTRA_PREFER_OFFLINE: false,
+      },
+    });
   }
 
   // Text-to-speech: read a reply aloud (British English by default).
