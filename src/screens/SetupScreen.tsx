@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -72,21 +73,26 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
   const [allFiles, setAllFiles] = useState(false);
   const [linux, setLinux] = useState<LinuxTerminalStatus>({ supported: false, available: false, sdk: 0 });
 
-  useEffect(() => {
-    getExecMode().then(setExecMode);
+  function refreshStatuses() {
+    setAutoOn(a11yEnabled());
     shizukuStatus().then(setShz);
     setAllFiles(hasAllFilesAccess());
     setLinux(linuxTerminalStatus());
+  }
+
+  useEffect(() => {
+    getExecMode().then(setExecMode);
+    refreshStatuses();
+    // Re-read permission statuses when returning from system settings.
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") refreshStatuses();
+    });
+    return () => sub.remove();
   }, []);
 
   function pickExecMode(m: ExecMode) {
     setExecMode(m);
     void saveExecMode(m); // persist immediately so it sticks
-  }
-  function refreshDev() {
-    shizukuStatus().then(setShz);
-    setAllFiles(hasAllFilesAccess());
-    setLinux(linuxTerminalStatus());
   }
 
   const canContinue =
@@ -219,24 +225,22 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
         )}
 
         <Text style={styles.label}>Screen automation (optional)</Text>
-        <Text style={styles.hint}>
-          Let Fraude operate your phone — drive any app to, say, open WhatsApp with a drafted message and press
-          send. Turn on Fraude in Accessibility settings. You can skip this and enable it later in Settings.
-          {"\n\n"}If the toggle is greyed out / “Restricted setting” (normal for sideloaded apps on Android 13+):
-          open App info → ⋮ (top-right) → “Allow restricted settings” first, then enable it.
-        </Text>
+        <Text style={styles.hint}>Let Fraude tap & type in other apps (e.g. send a WhatsApp). Optional — enable any time in Settings.</Text>
         <View style={styles.autoRow}>
-          <TouchableOpacity style={styles.autoBtn} onPress={() => openA11ySettings()}>
-            <Text style={styles.autoBtnText}>{autoOn ? "Accessibility settings" : "Enable automation"}</Text>
+          <TouchableOpacity style={[styles.autoBtn, autoOn && styles.autoBtnOn]} onPress={() => openA11ySettings()}>
+            <Text style={[styles.autoBtnText, autoOn && styles.autoBtnOnText]}>{autoOn ? "✓ Enabled" : "Enable"}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.autoBtn} onPress={() => openAppInfo()}>
-            <Text style={styles.autoBtnText}>App info</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.autoBtn} onPress={() => setAutoOn(a11yEnabled())}>
-            <Text style={styles.autoBtnText}>Refresh</Text>
-          </TouchableOpacity>
-          <Text style={styles.autoStatus}>{autoOn ? "enabled ✓" : "off"}</Text>
+          {!autoOn ? (
+            <TouchableOpacity style={styles.autoBtn} onPress={() => openAppInfo()}>
+              <Text style={styles.autoBtnText}>Can't toggle? App info</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
+        {!autoOn ? (
+          <Text style={styles.subhint}>
+            Greyed out? Sideloaded apps need: App info → ⋮ → Allow restricted settings, then enable.
+          </Text>
+        ) : null}
 
         <TouchableOpacity style={styles.accordionHead} onPress={() => setDevOpen((o) => !o)}>
           <Text style={styles.label}>Developer settings (optional)</Text>
@@ -261,33 +265,40 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
             ))}
 
             <Text style={styles.smallLabel}>Shizuku (ADB powers, no root)</Text>
-            <Text style={styles.hint}>Status: {shz.granted ? "connected ✓" : shz.running ? "running — needs permission" : "not running"}.</Text>
+            <Text style={styles.hint}>Install Shizuku, start it via Wireless Debugging, then grant access.</Text>
             <View style={styles.autoRow}>
-              <TouchableOpacity onPress={() => Linking.openURL("https://shizuku.rikka.app/guide/setup/")}>
-                <Text style={styles.link}>Set up Shizuku →</Text>
-              </TouchableOpacity>
-              {shz.running && !shz.granted ? (
-                <TouchableOpacity style={styles.autoBtn} onPress={() => requestShizukuPermission().then(refreshDev)}>
-                  <Text style={styles.autoBtnText}>Grant</Text>
+              {shz.granted ? (
+                <View style={[styles.autoBtn, styles.autoBtnOn]}>
+                  <Text style={styles.autoBtnOnText}>✓ Connected</Text>
+                </View>
+              ) : shz.running ? (
+                <TouchableOpacity style={styles.autoBtn} onPress={() => requestShizukuPermission().then(refreshStatuses)}>
+                  <Text style={styles.autoBtnText}>Grant access</Text>
                 </TouchableOpacity>
-              ) : null}
+              ) : (
+                <TouchableOpacity style={styles.autoBtn} onPress={() => Linking.openURL("https://shizuku.rikka.app/guide/setup/")}>
+                  <Text style={styles.autoBtnText}>Set up Shizuku</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             <Text style={styles.smallLabel}>Termux (toolchains)</Text>
-            <Text style={styles.hint}>Install Termux for real compilers; grant All files access so Fraude can read its build output without root. Status: {allFiles ? "all-files ✓" : "all-files off"}.</Text>
+            <Text style={styles.hint}>Real compilers (python/node/clang/git). Grant All files access so Fraude can read build output without root.</Text>
+            <TouchableOpacity onPress={() => Linking.openURL("https://f-droid.org/packages/com.termux/")}>
+              <Text style={styles.link}>Get Termux (F-Droid) →</Text>
+            </TouchableOpacity>
             <View style={styles.autoRow}>
-              <TouchableOpacity onPress={() => Linking.openURL("https://f-droid.org/packages/com.termux/")}>
-                <Text style={styles.link}>Get Termux →</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.autoBtn} onPress={() => requestAllFilesAccess()}>
-                <Text style={styles.autoBtnText}>All files access</Text>
+              <TouchableOpacity style={[styles.autoBtn, allFiles && styles.autoBtnOn]} onPress={() => requestAllFilesAccess()}>
+                <Text style={[styles.autoBtnText, allFiles && styles.autoBtnOnText]}>
+                  {allFiles ? "✓ All files access" : "Grant all files access"}
+                </Text>
               </TouchableOpacity>
             </View>
 
             {linux.supported ? (
               <>
                 <Text style={styles.smallLabel}>Native Linux terminal (Android 16+)</Text>
-                <Text style={styles.hint}>A full Debian VM for heavy manual coding. {linux.available ? "Available." : "Enable in Developer options."}</Text>
+                <Text style={styles.hint}>Full Debian VM for heavy manual coding. {linux.available ? "Available." : "Enable in Developer options."}</Text>
                 <View style={styles.autoRow}>
                   <TouchableOpacity style={styles.autoBtn} onPress={() => openLinuxTerminal()}>
                     <Text style={styles.autoBtnText}>{linux.available ? "Open" : "Enable"}</Text>
@@ -295,10 +306,6 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
                 </View>
               </>
             ) : null}
-
-            <TouchableOpacity style={[styles.autoBtn, { alignSelf: "flex-start", marginTop: 12 }]} onPress={refreshDev}>
-              <Text style={styles.autoBtnText}>Refresh status</Text>
-            </TouchableOpacity>
           </View>
         ) : null}
 
@@ -367,7 +374,10 @@ const styles = StyleSheet.create({
     backgroundColor: theme.surface,
   },
   autoBtnText: { color: theme.accent, fontWeight: "700", fontSize: 13 },
+  autoBtnOn: { backgroundColor: theme.accent, borderColor: theme.accent },
+  autoBtnOnText: { color: theme.bg, fontWeight: "700", fontSize: 13 },
   autoStatus: { color: theme.textDim, fontSize: 13 },
+  subhint: { color: theme.textDim, fontSize: 12, marginTop: 6, lineHeight: 17 },
   accordionHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 22 },
   accordionChevron: { color: theme.textDim, fontSize: 16 },
   smallLabel: { color: theme.text, fontSize: 14, fontWeight: "700", marginTop: 16, marginBottom: 4 },
