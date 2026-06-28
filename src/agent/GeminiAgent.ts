@@ -1942,6 +1942,9 @@ export async function runAgentTurn(
       setStatus(null);
       const out = textIn(turn) || "(no response)";
       const { title, reply } = requestTitle ? splitTitle(out) : { title: undefined, reply: out };
+      // Strip the TITLE line from the PERSISTED turn too, or it gets shown on
+      // reload and read aloud by TTS.
+      if (requestTitle && reply !== out) history[history.length - 1] = { role: "model", parts: [{ text: reply }] };
       return { contents: history, reply, title };
     }
 

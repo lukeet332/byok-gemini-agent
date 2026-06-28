@@ -7,6 +7,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   AppState,
   BackHandler,
   FlatList,
@@ -94,11 +95,17 @@ function turnText(c: Content): string {
     .trim();
 }
 
+// Defensively strip a leading "TITLE: …" line (older threads saved before the
+// title line was stripped from history).
+function dropTitleLine(text: string): string {
+  return text.replace(/^\s*TITLE:.*(?:\r?\n)+/i, "");
+}
+
 // Build the visible bubble list from the structured history (skips tool turns).
 function toMessages(contents: Content[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   for (const c of contents) {
-    const text = turnText(c);
+    const text = c.role === "model" ? dropTitleLine(turnText(c)) : turnText(c);
     const img = (c.parts ?? []).find((p) => p.inlineData)?.inlineData;
     const imageUri = img ? `data:${img.mimeType};base64,${img.data}` : undefined;
     if (text || imageUri) out.push({ id: nextId(), role: c.role, text, imageUri });
@@ -109,6 +116,7 @@ function toMessages(contents: Content[]): ChatMessage[] {
 // Strip markdown/URLs so text-to-speech reads cleanly.
 function plainText(text: string): string {
   return text
+    .replace(/^\s*TITLE:.*(?:\r?\n)+/i, "") // never read the title line aloud
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/https?:\/\/\S+/g, "")
@@ -122,6 +130,42 @@ function withInlineImages(text: string): string {
   return text.replace(
     /(^|[\s])(https?:\/\/[^\s)]+\.(?:png|jpe?g|gif|webp)(?:\?[^\s)]*)?)/gi,
     (_m, pre, url) => `${pre}\n![](${url})\n`
+  );
+}
+
+// A live waveform that wiggles inside the "stop listening" button. Five bars run
+// continuous staggered loops so it's always alive; `level` (0..1 mic loudness)
+// scales their amplitude so they jump when you actually speak.
+function VoiceWave({ level, color }: { level: number; color: string }) {
+  const bars = useRef([0, 1, 2, 3, 4].map(() => new Animated.Value(0.3))).current;
+  useEffect(() => {
+    const loops = bars.map((v, i) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(v, { toValue: 1, duration: 320 + i * 70, delay: i * 60, useNativeDriver: false }),
+          Animated.timing(v, { toValue: 0.25, duration: 320 + i * 70, useNativeDriver: false }),
+        ])
+      )
+    );
+    loops.forEach((l) => l.start());
+    return () => loops.forEach((l) => l.stop());
+  }, [bars]);
+  const amp = 0.4 + Math.min(1, Math.max(0, level)) * 0.6; // floor so it's never flat
+  return (
+    <View style={styles.wave}>
+      {bars.map((v, i) => (
+        <Animated.View
+          key={i}
+          style={[
+            styles.waveBar,
+            {
+              backgroundColor: color,
+              transform: [{ scaleY: Animated.multiply(v, amp) }],
+            },
+          ]}
+        />
+      ))}
+    </View>
   );
 }
 
@@ -229,6 +273,9 @@ export default function ChatScreen({
   const [needsResume, setNeedsResume] = useState(false);
   // True when the pending message was dictated (so we read the reply aloud).
   const voiceInputRef = useRef(false);
+  const lastTranscriptRef = useRef(""); // newest dictation transcript (for auto-send)
+  const retriedLocaleRef = useRef(false); // fell back to en-US after en-GB pack missing?
+  const handleSendRef = useRef<(t: string) => void>(() => {}); // latest sender, for event handlers
   // Messages sent while a turn is running queue here; runningRef gates the single
   // runner; interruptRef marks an abort that should immediately run the queue.
   const queueRef = useRef<Queued[]>([]);
@@ -318,6 +365,7 @@ export default function ChatScreen({
     const t = e.results?.[0]?.transcript;
     if (typeof t === "string") {
       setInput(t);
+      lastTranscriptRef.current = t;
       voiceInputRef.current = true; // dictated → reply will be spoken
     }
   });
@@ -327,48 +375,61 @@ export default function ChatScreen({
     const v = typeof e.value === "number" ? e.value : 0;
     setMicLevel(Math.max(0, Math.min(1, (v + 2) / 12)));
   });
+  // Finished talking (after the silence grace period) → auto-send the dictation.
   useSpeechRecognitionEvent("end", () => {
     setListening(false);
     setMicLevel(0);
+    const finalText = lastTranscriptRef.current.trim();
+    lastTranscriptRef.current = "";
+    if (finalText) handleSendRef.current(finalText);
   });
-  useSpeechRecognitionEvent("error", () => {
+  useSpeechRecognitionEvent("error", (e) => {
     setListening(false);
     setMicLevel(0);
+    // en-GB pack not downloaded (error 13) → retry once with en-US so dictation
+    // still works now, and kick off the en-GB download for next time.
+    const langIssue = e.error === "language-not-supported" || /not.*download|language.?pack/i.test(e.message || "");
+    if (langIssue && !retriedLocaleRef.current) {
+      retriedLocaleRef.current = true;
+      try {
+        ExpoSpeechRecognitionModule.androidTriggerOfflineModelDownload({ locale: "en-GB" }).catch(() => {});
+      } catch {
+        // download trigger not available — ignore
+      }
+      startListening("en-US");
+    }
   });
+
+  function startListening(lang: string) {
+    setInput("");
+    setMicLevel(0);
+    setListening(true);
+    ExpoSpeechRecognitionModule.start({
+      lang,
+      interimResults: true,
+      continuous: false,
+      addsPunctuation: true,
+      volumeChangeEventOptions: { enabled: true, intervalMillis: 120 },
+      // Wait a couple of seconds of silence before deciding the user has finished,
+      // so they aren't cut off mid-sentence.
+      androidIntentOptions: {
+        EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS: 2000,
+        EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS: 2000,
+        EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS: 2000,
+      },
+    });
+  }
 
   async function toggleMic() {
     if (listening) {
-      ExpoSpeechRecognitionModule.stop();
-      setListening(false);
+      ExpoSpeechRecognitionModule.stop(); // fires "end" → auto-sends
       return;
     }
     const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
     if (!perm.granted) return;
-    setInput("");
-    setListening(true);
-    // Prefer Google's high-quality cloud recognizer (free-form + punctuation)
-    // over the default/on-device engine, which is much less accurate.
-    let googleService: string | undefined;
-    try {
-      const services = ExpoSpeechRecognitionModule.getSpeechRecognitionServices();
-      googleService = services.find((s) => s.includes("googlequicksearchbox")) ?? services[0];
-    } catch {
-      // fall back to the default service
-    }
-    setMicLevel(0);
-    ExpoSpeechRecognitionModule.start({
-      lang: "en-GB",
-      interimResults: true,
-      continuous: false,
-      requiresOnDeviceRecognition: false, // use the network/Google recognizer
-      addsPunctuation: true,
-      androidRecognitionServicePackage: googleService,
-      volumeChangeEventOptions: { enabled: true, intervalMillis: 120 },
-      androidIntentOptions: {
-        EXTRA_LANGUAGE_MODEL: "free_form",
-        EXTRA_PREFER_OFFLINE: false,
-      },
-    });
+    retriedLocaleRef.current = false;
+    lastTranscriptRef.current = "";
+    startListening("en-GB");
   }
 
   // Text-to-speech: read a reply aloud (British English by default).
@@ -464,6 +525,10 @@ export default function ChatScreen({
     scrollToEnd();
     return id;
   }
+
+  // Keep the ref pointing at the latest sender so event handlers (STT auto-send)
+  // never call a stale closure.
+  handleSendRef.current = handleSendMessage;
 
   function handleSendMessage(userPrompt: string) {
     const prompt = userPrompt.trim();
@@ -767,21 +832,14 @@ export default function ChatScreen({
             placeholderTextColor={theme.textDim}
             multiline
           />
-          {listening ? (
-            <View style={styles.levelMeter}>
-              {[0.15, 0.35, 0.6, 0.85].map((th, i) => (
-                <View
-                  key={i}
-                  style={[
-                    styles.levelBar,
-                    { height: 5 + th * 16, opacity: micLevel >= th ? 1 : 0.25 },
-                  ]}
-                />
-              ))}
-            </View>
-          ) : null}
           <TouchableOpacity onPress={toggleMic} disabled={busy} hitSlop={8}>
-            <Ionicons name={listening ? "stop-circle" : "mic"} size={22} color={listening ? theme.danger : theme.textDim} />
+            {listening ? (
+              <View style={styles.micActive}>
+                <VoiceWave level={micLevel} color={theme.danger} />
+              </View>
+            ) : (
+              <Ionicons name="mic" size={22} color={theme.textDim} />
+            )}
           </TouchableOpacity>
         </View>
         <View style={styles.composerDivider} />
@@ -959,8 +1017,18 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   composerTop: { flexDirection: "row", alignItems: "flex-end", gap: 10, paddingBottom: 8 },
-  levelMeter: { flexDirection: "row", alignItems: "flex-end", gap: 3, height: 24, paddingBottom: 2 },
-  levelBar: { width: 3.5, borderRadius: 2, backgroundColor: theme.accent },
+  micActive: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.danger + "22",
+    borderWidth: 1,
+    borderColor: theme.danger + "55",
+  },
+  wave: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 2.5, height: 18 },
+  waveBar: { width: 2.5, height: 16, borderRadius: 2 },
   composerInput: { flex: 1, color: theme.text, fontSize: 16, minHeight: 36, maxHeight: 150, paddingTop: 4, paddingBottom: 4 },
   // Full-bleed divider (cancels the card's horizontal padding so it spans edge to edge).
   composerDivider: { height: 1, backgroundColor: theme.border, marginHorizontal: -14, marginBottom: 10 },
@@ -1012,7 +1080,6 @@ const styles = StyleSheet.create({
   sendBtn: { backgroundColor: theme.accent },
   sendBtnDisabled: { opacity: 0.45 },
   stopBtn: { backgroundColor: theme.danger },
-  micActive: { backgroundColor: theme.danger },
   keepOpen: { color: theme.textDim, fontSize: 11, textAlign: "center", paddingHorizontal: 16, paddingBottom: 4 },
   speakBtn: { alignSelf: "flex-end", marginTop: 6 },
 });
