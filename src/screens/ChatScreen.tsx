@@ -1146,7 +1146,10 @@ const styles = StyleSheet.create({
   alignRight: { alignSelf: "flex-end", borderBottomRightRadius: 4 },
   alignLeft: { alignSelf: "flex-start", borderBottomLeftRadius: 4 },
   userBubble: { backgroundColor: theme.userBubble, paddingVertical: 10 },
-  modelBubble: { backgroundColor: theme.modelBubble, borderWidth: 1, borderColor: theme.border },
+  // Definite width (not shrink-to-fit): markdown lists report min-content width
+  // (the longest word), so a shrink-wrapped bubble collapses to one word per
+  // line. A fixed width gives the content room to lay out normally.
+  modelBubble: { width: "86%", backgroundColor: theme.modelBubble, borderWidth: 1, borderColor: theme.border },
   userText: { color: theme.userBubbleText, fontSize: 15, lineHeight: 21 },
   modelText: { color: theme.text, fontSize: 15, lineHeight: 21 },
   attachImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 6 },
