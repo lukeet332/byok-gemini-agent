@@ -60,16 +60,26 @@ class FraudeAccessibilityService : AccessibilityService() {
     for (i in 0 until node.childCount) walk(node.getChild(i), sb, depth + 1)
   }
 
-  fun tapText(text: String): Boolean {
+  // The model may reference a control by its visible text, its contentDescription,
+  // OR its resource-id (all three appear in our screen dump) — so both entry points
+  // try every strategy. This is what makes "tap Send" work across apps: messaging
+  // send buttons have NO text (label is a contentDescription, often on a
+  // non-clickable child of the real button) and sometimes only a resource-id.
+  fun tapText(text: String): Boolean = tapBest(text)
+
+  fun tapId(id: String): Boolean = tapBest(id)
+
+  private fun tapBest(query: String): Boolean {
     val root = rootInActiveWindow ?: return false
-    // 1) Fast path: a node whose visible text matches.
-    root.findAccessibilityNodeInfosByText(text)?.firstOrNull()?.let { return clickNode(it) }
-    // 2) Fallback: match by contentDescription too. Most icon buttons (WhatsApp's
-    //    "Send" FAB, Messages' "Send SMS") expose their label ONLY as a
-    //    contentDescription — often on a non-clickable child whose clickable parent
-    //    carries just a resource-id — so findByText misses them entirely.
-    val match = findByTextOrDesc(root, text.trim().lowercase()) ?: return false
-    return clickNode(match)
+    val q = query.trim()
+    if (q.isEmpty()) return false
+    // 1) exact resource-id (e.g. a Compose testTag like "Compose:Draft:Send")
+    root.findAccessibilityNodeInfosByViewId(q)?.firstOrNull()?.let { return clickNode(it) }
+    // 2) visible text (platform substring search)
+    root.findAccessibilityNodeInfosByText(q)?.firstOrNull()?.let { return clickNode(it) }
+    // 3) text OR contentDescription, scored, preferring clickable
+    findByTextOrDesc(root, q.lowercase())?.let { return clickNode(it) }
+    return false
   }
 
   // Best node whose visible text or contentDescription matches (case-insensitive),
@@ -105,12 +115,6 @@ class FraudeAccessibilityService : AccessibilityService() {
       n = n.parent
     }
     return false
-  }
-
-  fun tapId(id: String): Boolean {
-    val root = rootInActiveWindow ?: return false
-    val node = root.findAccessibilityNodeInfosByViewId(id)?.firstOrNull() ?: return false
-    return clickNode(node)
   }
 
   private fun clickNode(node: AccessibilityNodeInfo): Boolean {

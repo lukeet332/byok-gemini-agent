@@ -181,6 +181,8 @@ function safeSplit(contents: Content[]): number {
   return userIdxs[userIdxs.length - KEEP_RECENT_TURNS];
 }
 
+type ApprovalMode = "auto" | "batched" | "granular";
+
 interface Props {
   threadId: string;
   onThreadChanged: () => void; // tell the list to refresh (title/updatedAt)
@@ -209,23 +211,32 @@ export default function ChatScreen({
   const [micLevel, setMicLevel] = useState(0); // 0..1 live input loudness
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<{ uri: string; data: string; mimeType: string } | null>(null);
-  const [autoMode, setAutoModeState] = useState(false);
+  // Approval mode (session-only; resets to a confirming mode each launch):
+  //  auto     — run everything without asking
+  //  batched  — approve the whole batch of actions in ONE prompt (default)
+  //  granular — tick/untick each action; nothing runs until you Apply
+  const [approvalMode, setApprovalModeState] = useState<ApprovalMode>("batched");
   const [autoMenu, setAutoMenu] = useState(false);
   const [mcpVisible, setMcpVisible] = useState(false);
-  // Themed in-app confirmation (replaces the native Alert). Holds a BATCH of
-  // actions so a multi-step task is approved once, not step-by-step. `resolve` is
-  // the pending promise's resolver from confirmWrite.
+  // Themed in-app confirmation (replaces the native Alert). Holds the actions
+  // needing a decision; `total` is the full batch size so the result array lines
+  // up. `resolve` is the pending promise's resolver from confirmWrite.
   const [confirmReq, setConfirmReq] = useState<{
-    items: { label: string; body: string }[];
+    items: { idx: number; label: string; body: string }[];
+    total: number;
+    granular: boolean;
     danger: boolean;
   } | null>(null);
-  const confirmResolveRef = useRef<((ok: boolean) => void) | null>(null);
-  const autoModeRef = useRef(false);
+  const [confirmChecks, setConfirmChecks] = useState<Record<number, boolean>>({});
+  const [confirmNote, setConfirmNote] = useState(""); // "Other" redirect text
+  const [noteOpen, setNoteOpen] = useState(false);
+  const confirmResolveRef = useRef<((r: { decisions: boolean[]; feedback?: string }) => void) | null>(null);
+  const approvalRef = useRef<ApprovalMode>("batched");
   const voiceIdRef = useRef<string | undefined>(undefined);
 
-  function setAuto(v: boolean) {
-    autoModeRef.current = v;
-    setAutoModeState(v);
+  function setApprovalMode(m: ApprovalMode) {
+    approvalRef.current = m;
+    setApprovalModeState(m);
     setAutoMenu(false);
   }
   // Streaming: targetRef holds the full text so far; `displayed` is the smoothly
@@ -338,11 +349,12 @@ export default function ChatScreen({
     return () => sub.remove();
   }, []);
 
-  // Approve a BATCH of actions in one prompt (a multi-step task asks once). Each
-  // entry is one pending tool call. System-level shell (Shizuku/root) always
-  // confirms when that rail is on — even in Auto mode; Auto mode bypasses the rest.
-  function confirmWrite(reqs: { method: string; url: string }[]): Promise<boolean> {
-    if (!reqs.length) return Promise.resolve(true);
+  // Decide a batch of pending actions, returning one boolean per request.
+  //  auto     — approve everything (except Shizuku/root shell, which always asks)
+  //  batched  — one prompt; Allow/Decline applies to the whole batch
+  //  granular — one prompt; tick each action, nothing runs until Apply
+  function confirmWrite(reqs: { method: string; url: string }[]): Promise<{ decisions: boolean[]; feedback?: string }> {
+    if (!reqs.length) return Promise.resolve({ decisions: [] });
     const labels: Record<string, string> = {
       INTENT: "Open another app",
       OPEN: "Open a link",
@@ -353,22 +365,39 @@ export default function ChatScreen({
       UI: "Automate your screen",
     };
     const isSystem = (r: { method: string; url: string }) => r.method === "SHELL" && /^\[(shizuku|root)\]/.test(r.url);
-    const mustConfirm = reqs.some((r) => isSystem(r) && confirmSystemRef.current);
-    if (autoModeRef.current && !mustConfirm) return Promise.resolve(true);
-    const danger = reqs.some((r) => r.method === "SHELL" || r.method === "HTTP" || isSystem(r));
-    const items = reqs.map((r) => ({ label: labels[r.method] ?? `${r.method} request`, body: r.url }));
+    const mode = approvalRef.current;
+    // Which requests actually need a human decision in this mode.
+    const gated = reqs
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => (isSystem(r) && confirmSystemRef.current) || mode !== "auto");
+    if (!gated.length) return Promise.resolve({ decisions: reqs.map(() => true) }); // pure Auto
+    const items = gated.map(({ r, i }) => ({ idx: i, label: labels[r.method] ?? `${r.method} request`, body: r.url }));
+    const danger = gated.some(({ r }) => r.method === "SHELL" || r.method === "HTTP" || isSystem(r));
+    setConfirmChecks(Object.fromEntries(items.map((it) => [it.idx, true])));
+    setConfirmNote("");
+    setNoteOpen(false);
     return new Promise((resolve) => {
       confirmResolveRef.current = resolve;
-      setConfirmReq({ items, danger });
+      setConfirmReq({ items, total: reqs.length, granular: mode === "granular", danger });
     });
   }
 
-  // Resolve the themed confirm and close it.
-  function answerConfirm(ok: boolean) {
+  // Resolve the themed confirm. allow=true → approve all gated; false → decline
+  // all; null → use the per-item ticks (granular). With `feedback`, every gated
+  // action is declined and the note is sent back so the model can re-plan.
+  // Auto-approved items always stay true.
+  function answerConfirm(allow: boolean | null, feedback?: string) {
+    const req = confirmReq;
     const resolve = confirmResolveRef.current;
     confirmResolveRef.current = null;
     setConfirmReq(null);
-    resolve?.(ok);
+    if (!req || !resolve) return;
+    const note = feedback?.trim() || undefined;
+    const decisions = new Array<boolean>(req.total).fill(true);
+    for (const it of req.items) {
+      decisions[it.idx] = note ? false : allow === null ? !!confirmChecks[it.idx] : allow;
+    }
+    resolve({ decisions, feedback: note });
   }
 
   // Speech-to-text: stream the transcript into the input box.
@@ -859,9 +888,18 @@ export default function ChatScreen({
             <Ionicons name="add" size={26} color={theme.textDim} />
           </TouchableOpacity>
           <View style={{ flex: 1 }} />
-          <TouchableOpacity style={[styles.autoPill, autoMode && styles.autoPillOn]} onPress={() => setAutoMenu(true)}>
-            <Ionicons name="flash" size={14} color={autoMode ? theme.bg : theme.accent} />
-            <Text style={[styles.autoPillText, autoMode && styles.autoPillTextOn]}>{autoMode ? "Auto" : "Ask"}</Text>
+          <TouchableOpacity
+            style={[styles.autoPill, approvalMode === "auto" && styles.autoPillOn]}
+            onPress={() => setAutoMenu(true)}
+          >
+            <Ionicons
+              name={approvalMode === "auto" ? "flash" : approvalMode === "granular" ? "list" : "albums"}
+              size={14}
+              color={approvalMode === "auto" ? theme.bg : theme.accent}
+            />
+            <Text style={[styles.autoPillText, approvalMode === "auto" && styles.autoPillTextOn]}>
+              {approvalMode === "auto" ? "Auto" : approvalMode === "granular" ? "Each" : "Batched"}
+            </Text>
           </TouchableOpacity>
           {busy ? (
             <TouchableOpacity style={styles.composerStop} onPress={() => abortRef.current?.abort()}>
@@ -887,34 +925,93 @@ export default function ChatScreen({
               {(confirmReq?.items.length ?? 0) > 1 ? `Confirm ${confirmReq?.items.length} actions` : "Confirm action"}
             </Text>
             <Text style={styles.confirmDetail}>
-              {(confirmReq?.items.length ?? 0) > 1
-                ? "Fraude wants to do the following, in order:"
-                : "Fraude wants to:"}
+              {confirmReq?.granular
+                ? "Tick the actions to allow — nothing runs until you tap Apply:"
+                : (confirmReq?.items.length ?? 0) > 1
+                  ? "Fraude wants to do the following, in order:"
+                  : "Fraude wants to:"}
             </Text>
             <ScrollView style={styles.confirmList} contentContainerStyle={{ gap: 10 }}>
-              {confirmReq?.items.map((it, i) => (
-                <View key={i} style={styles.confirmItem}>
-                  {(confirmReq?.items.length ?? 0) > 1 ? <Text style={styles.confirmStep}>{i + 1}</Text> : null}
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.confirmItemLabel}>{it.label}</Text>
-                    <Text style={styles.confirmItemBody} selectable numberOfLines={4}>{it.body}</Text>
-                  </View>
-                </View>
-              ))}
+              {confirmReq?.items.map((it, i) => {
+                const on = confirmChecks[it.idx];
+                const row = (
+                  <>
+                    {confirmReq.granular ? (
+                      <Ionicons
+                        name={on ? "checkbox" : "square-outline"}
+                        size={22}
+                        color={on ? theme.accent : theme.textDim}
+                      />
+                    ) : confirmReq.items.length > 1 ? (
+                      <Text style={styles.confirmStep}>{i + 1}</Text>
+                    ) : null}
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.confirmItemLabel, confirmReq.granular && !on && styles.confirmItemOff]}>
+                        {it.label}
+                      </Text>
+                      <Text style={styles.confirmItemBody} selectable numberOfLines={4}>{it.body}</Text>
+                    </View>
+                  </>
+                );
+                return confirmReq.granular ? (
+                  <TouchableOpacity
+                    key={i}
+                    style={styles.confirmItem}
+                    onPress={() => setConfirmChecks((c) => ({ ...c, [it.idx]: !c[it.idx] }))}
+                  >
+                    {row}
+                  </TouchableOpacity>
+                ) : (
+                  <View key={i} style={styles.confirmItem}>{row}</View>
+                );
+              })}
             </ScrollView>
-            <View style={styles.confirmActions}>
-              <TouchableOpacity style={styles.confirmDecline} onPress={() => answerConfirm(false)}>
-                <Text style={styles.confirmDeclineText}>Decline</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.confirmAllow, confirmReq?.danger && styles.confirmAllowDanger]}
-                onPress={() => answerConfirm(true)}
-              >
-                <Text style={[styles.confirmAllowText, confirmReq?.danger && styles.confirmAllowDangerText]}>
-                  {confirmReq?.danger ? "Run anyway" : "Allow"}
-                </Text>
-              </TouchableOpacity>
-            </View>
+
+            {noteOpen ? (
+              <View style={styles.confirmNoteWrap}>
+                <TextInput
+                  style={styles.confirmNoteInput}
+                  value={confirmNote}
+                  onChangeText={setConfirmNote}
+                  placeholder="What should it do instead?"
+                  placeholderTextColor={theme.textDim}
+                  multiline
+                  autoFocus
+                />
+                <View style={styles.confirmActions}>
+                  <TouchableOpacity style={styles.confirmDecline} onPress={() => setNoteOpen(false)}>
+                    <Text style={styles.confirmDeclineText}>Back</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.confirmAllow, !confirmNote.trim() && styles.confirmAllowDisabled]}
+                    disabled={!confirmNote.trim()}
+                    onPress={() => answerConfirm(false, confirmNote)}
+                  >
+                    <Text style={styles.confirmAllowText}>Send guidance</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <>
+                <View style={styles.confirmActions}>
+                  <TouchableOpacity style={styles.confirmDecline} onPress={() => answerConfirm(false)}>
+                    <Text style={styles.confirmDeclineText}>{confirmReq?.granular ? "Cancel" : "Decline"}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.confirmAllow, confirmReq?.danger && styles.confirmAllowDanger]}
+                    onPress={() => answerConfirm(confirmReq?.granular ? null : true)}
+                  >
+                    <Text style={[styles.confirmAllowText, confirmReq?.danger && styles.confirmAllowDangerText]}>
+                      {confirmReq?.granular ? "Apply" : confirmReq?.danger ? "Run anyway" : "Allow"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                <TouchableOpacity style={styles.confirmOther} onPress={() => setNoteOpen(true)}>
+                  <Ionicons name="create-outline" size={15} color={theme.textDim} />
+                  <Text style={styles.confirmOtherText}>Something else — tell Fraude what to do</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </View>
       </Modal>
@@ -923,21 +1020,38 @@ export default function ChatScreen({
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAutoMenu(false)}>
           <View style={styles.modeCard}>
             <Text style={styles.modeCardTitle}>Permission mode</Text>
-            <TouchableOpacity style={[styles.modeRow, !autoMode && styles.modeRowActive]} onPress={() => setAuto(false)}>
-              <Ionicons name="hand-left-outline" size={22} color={theme.text} />
+            <TouchableOpacity
+              style={[styles.modeRow, approvalMode === "batched" && styles.modeRowActive]}
+              onPress={() => setApprovalMode("batched")}
+            >
+              <Ionicons name="albums-outline" size={22} color={theme.text} />
               <View style={styles.modeTextWrap}>
-                <Text style={styles.modeName}>Ask before actions</Text>
-                <Text style={styles.modeDesc}>Fraude asks before each write — API calls, app handoffs, file writes, GitHub commits.</Text>
+                <Text style={styles.modeName}>Batched approval</Text>
+                <Text style={styles.modeDesc}>Approve a whole task in one prompt. Quick for multi-step jobs.</Text>
               </View>
-              {!autoMode ? <Ionicons name="checkmark" size={20} color={theme.accent} /> : null}
+              {approvalMode === "batched" ? <Ionicons name="checkmark" size={20} color={theme.accent} /> : null}
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.modeRow, autoMode && styles.modeRowActive]} onPress={() => setAuto(true)}>
+            <TouchableOpacity
+              style={[styles.modeRow, approvalMode === "granular" && styles.modeRowActive]}
+              onPress={() => setApprovalMode("granular")}
+            >
+              <Ionicons name="list-outline" size={22} color={theme.text} />
+              <View style={styles.modeTextWrap}>
+                <Text style={styles.modeName}>Approve each action</Text>
+                <Text style={styles.modeDesc}>Tick the steps to allow — nothing runs until you Apply. Most control.</Text>
+              </View>
+              {approvalMode === "granular" ? <Ionicons name="checkmark" size={20} color={theme.accent} /> : null}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modeRow, approvalMode === "auto" && styles.modeRowActive]}
+              onPress={() => setApprovalMode("auto")}
+            >
               <Ionicons name="flash" size={22} color={theme.accent} />
               <View style={styles.modeTextWrap}>
                 <Text style={styles.modeName}>Auto mode</Text>
-                <Text style={styles.modeDesc}>Fraude performs every action without asking. Only use when you trust the task.</Text>
+                <Text style={styles.modeDesc}>Run everything without asking (system shell still confirms). Trust the task.</Text>
               </View>
-              {autoMode ? <Ionicons name="checkmark" size={20} color={theme.accent} /> : null}
+              {approvalMode === "auto" ? <Ionicons name="checkmark" size={20} color={theme.accent} /> : null}
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
@@ -1124,8 +1238,23 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   confirmItemLabel: { color: theme.text, fontSize: 15, fontWeight: "700" },
+  confirmItemOff: { color: theme.textDim, textDecorationLine: "line-through" },
   confirmItemBody: { color: theme.textDim, fontSize: 13, marginTop: 3, lineHeight: 18 },
   confirmActions: { flexDirection: "row", gap: 10, marginTop: 16 },
+  confirmOther: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 12, marginTop: 2 },
+  confirmOtherText: { color: theme.textDim, fontSize: 13, fontWeight: "600" },
+  confirmNoteWrap: { marginTop: 12 },
+  confirmNoteInput: {
+    backgroundColor: theme.surfaceAlt,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.border,
+    color: theme.text,
+    fontSize: 15,
+    padding: 12,
+    minHeight: 80,
+    textAlignVertical: "top",
+  },
   confirmDecline: {
     flex: 1,
     paddingVertical: 13,
@@ -1139,6 +1268,7 @@ const styles = StyleSheet.create({
   confirmAllowText: { color: theme.bg, fontSize: 15, fontWeight: "800" },
   confirmAllowDanger: { backgroundColor: theme.danger },
   confirmAllowDangerText: { color: "#fff" },
+  confirmAllowDisabled: { opacity: 0.4 },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end", padding: 16 },
   modeCard: { backgroundColor: theme.surface, borderRadius: 16, borderWidth: 1, borderColor: theme.border, padding: 14, marginBottom: 80 },
   modeCardTitle: { color: theme.textDim, fontSize: 13, fontWeight: "700", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 },

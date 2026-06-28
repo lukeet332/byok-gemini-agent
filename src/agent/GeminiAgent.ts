@@ -1757,9 +1757,13 @@ export interface AgentCallbacks {
   // Abort the whole turn (Stop button).
   signal?: AbortSignal;
   // Ask the user before state-changing / outward actions. Receives the WHOLE
-  // batch of actions in one model response so a multi-step task is approved once
-  // (resolve false to decline them all; the model is told and can adapt).
-  confirmWrite?: (reqs: { method: string; url: string }[]) => Promise<boolean>;
+  // batch of actions from one model response so a multi-step task is approved
+  // once. Returns one decision per request (some can be declined individually),
+  // plus optional `feedback` — free-text the user gave instead of approving, fed
+  // back to the model so it re-plans rather than retrying.
+  confirmWrite?: (
+    reqs: { method: string; url: string }[]
+  ) => Promise<{ decisions: boolean[]; feedback?: string }>;
 }
 
 export class AbortedError extends Error {
@@ -1969,6 +1973,7 @@ export async function runAgentTurn(
       declined: boolean;
       unknown: boolean;
       confirm?: { method: string; url: string };
+      declineNote?: string; // user's "do this instead" guidance, surfaced to the model
     };
     const plans: Plan[] = [];
     for (const call of calls) {
@@ -2041,25 +2046,29 @@ export async function runAgentTurn(
     }
 
     // BATCH the approval: a multi-step task asks once, not per-step. Tools the
-    // model emitted together in this response are confirmed in a single dialog.
+    // model emitted together in this response are confirmed in a single dialog;
+    // each can be approved or declined individually (granular mode).
     const toConfirm = plans.filter((p) => p.confirm);
     if (toConfirm.length && callbacks.confirmWrite) {
-      const ok = await callbacks.confirmWrite(toConfirm.map((p) => p.confirm!));
-      if (ok) {
-        // Approving an app handoff also authorises finishing the task inside that
-        // app — a per-tap confirm can't render once it's foregrounded (see
-        // uiPreApproved). Auto mode reaches here too (confirm auto-resolves true).
-        if (toConfirm.some((p) => p.call.name === "open_link" || p.call.name === "send_android_intent")) {
-          uiPreApproved = true;
+      const { decisions, feedback } = await callbacks.confirmWrite(toConfirm.map((p) => p.confirm!));
+      toConfirm.forEach((p, i) => {
+        if (decisions[i] === false) {
+          p.declined = true;
+          // Feed the user's "do this instead" note back so the model re-plans.
+          if (feedback) p.declineNote = `The user declined this and said: "${feedback}". Re-plan to follow that guidance instead of retrying this action.`;
         }
-      } else {
-        toConfirm.forEach((p) => (p.declined = true));
+      });
+      // Approving an app handoff also authorises finishing the task inside that
+      // app — a per-tap confirm can't render once it's foregrounded (see
+      // uiPreApproved). Auto mode reaches here too (decisions auto-resolve true).
+      if (toConfirm.some((p, i) => decisions[i] !== false && (p.call.name === "open_link" || p.call.name === "send_android_intent"))) {
+        uiPreApproved = true;
       }
     }
 
     const execPlan = async (p: Plan): Promise<Record<string, unknown>> => {
       if (p.unknown) return { ok: false, error: `Unknown tool: ${p.call.name}` };
-      if (p.declined) return { ok: false, error: "The user declined this request. Do not retry it; ask them what to do instead." };
+      if (p.declined) return { ok: false, error: p.declineNote ?? "The user declined this request. Do not retry it; ask them what to do instead." };
       try {
         if (p.isMcp) return await McpClient.callMcpTool(p.call.name, p.call.args ?? {});
         return await p.executor!(p.call.args ?? {}, signal);
