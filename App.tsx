@@ -15,7 +15,8 @@ import ChatScreen from "./src/screens/ChatScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import SetupScreen from "./src/screens/SetupScreen";
 import ThreadListScreen from "./src/screens/ThreadListScreen";
-import { hasModelAccess } from "./src/storage/SecureStorage";
+import { getStartupPermsDone, hasModelAccess, setStartupPermsDone } from "./src/storage/SecureStorage";
+import { requestStartupPermissions } from "./src/device/Permissions";
 import { theme } from "./src/theme";
 
 type View_ = "list" | "chat" | "settings";
@@ -39,6 +40,17 @@ export default function App() {
   useEffect(() => {
     hasModelAccess().then(setReady);
   }, []);
+
+  // On first open (after the splash), request the runtime permissions the app
+  // uses — once. Special-access grants stay behind their Settings buttons.
+  useEffect(() => {
+    if (!splashDone) return;
+    (async () => {
+      if (await getStartupPermsDone()) return;
+      await requestStartupPermissions();
+      await setStartupPermsDone();
+    })();
+  }, [splashDone]);
 
   function openThread(id: string) {
     setActiveThreadId(id);

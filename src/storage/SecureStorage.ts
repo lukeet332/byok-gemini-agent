@@ -223,6 +223,18 @@ export async function saveBackgroundRun(on: boolean): Promise<void> {
   await SecureStore.setItemAsync(BACKGROUND_KEY, on ? "1" : "0");
 }
 
+// ---- First-run permission bootstrap (request runtime perms once) ----
+
+const PERMS_KEY = "STARTUP_PERMS_DONE";
+
+export async function getStartupPermsDone(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(PERMS_KEY)) === "1";
+}
+
+export async function setStartupPermsDone(): Promise<void> {
+  await SecureStore.setItemAsync(PERMS_KEY, "1");
+}
+
 // ---- Execution mode (advanced; default: off) ----
 
 export async function getExecMode(): Promise<ExecMode> {
