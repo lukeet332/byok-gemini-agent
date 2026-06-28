@@ -4,10 +4,11 @@
 
 import { applyPatch, parsePatch } from "diff";
 
-import { getGithubToken, getWriteMode } from "../storage/SecureStorage";
+import { getGithubToken, getProMode, getWriteMode } from "../storage/SecureStorage";
 
 const API = "https://api.github.com";
 const MAX_FILE_CHARS = 16000;
+const MAX_FILE_CHARS_PRO = 200000; // Pro: read whole files for coding/long docs
 
 function authHeaders(token: string): Record<string, string> {
   return {
@@ -59,8 +60,9 @@ export async function getFile(repo: string, path: string, ref?: string): Promise
       return { ok: false, error: `GitHub ${res.status}: ${(j?.message ?? "").toString().slice(0, 160)}` };
     }
     const text = await res.text();
-    const truncated = text.length > MAX_FILE_CHARS;
-    return { ok: true, repo, path, content: truncated ? text.slice(0, MAX_FILE_CHARS) + "\n...[truncated]" : text };
+    const cap = (await getProMode()) ? MAX_FILE_CHARS_PRO : MAX_FILE_CHARS;
+    const truncated = text.length > cap;
+    return { ok: true, repo, path, content: truncated ? text.slice(0, cap) + "\n...[truncated]" : text };
   } catch (e) {
     return { ok: false, error: String(e) };
   }

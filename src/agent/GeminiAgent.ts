@@ -108,6 +108,12 @@ const REQUEST_TIMEOUT_MS = 90000;
 let proMode = false;
 const proCap = (base: number) => (proMode ? base * 2 : base);
 
+// Provider-agnostic "deep think": in Pro mode, raise each backend's reasoning
+// effort where it's safe (and where the chosen model supports it).
+function isOpenAiReasoningModel(model: string): boolean {
+  return /(^o\d)|\bo\d[-_]|gpt-5|reason|think|deepseek-r|\bqwq\b|\br1\b/i.test(model);
+}
+
 // Present as a real browser so naive user-agent blocks don't reject http_request.
 const BROWSER_UA =
   "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
@@ -135,6 +141,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "Behaviour:",
   "- Be proactive: when a question needs current or external info, USE the tools instead of guessing or saying you can't browse.",
   "- Chain steps: search -> open the most relevant pages -> extract what matters -> (optionally call APIs) -> synthesise.",
+  "- PARALLEL vs SEQUENTIAL is YOUR call: tools you request TOGETHER in one response run concurrently (use this for independent work — e.g. several searches at once). If a step needs a previous step's result, or order matters (e.g. open an app THEN tap a button), request them in SEPARATE turns so they run in order.",
   "- VERIFY WHEN IT MATTERS — DON'T GUESS. Answer directly from your own knowledge when you're genuinely confident and the fact is stable (general knowledge, definitions, how-tos, well-known history). But you have web access, so search/fetch and CONFIRM (citing URLs) whenever the answer is time-sensitive or current (prices, news, scores, 'latest'/'now', availability), niche/specific/obscure, or you're at all unsure. The test is your confidence: sure and stable -> just answer; shaky, fresh, or specific -> look it up. Never pass off a guess or a hazy memory as certain fact.",
   "- If a tool fails, read the error, adjust (different URL, headers, or query) and retry a couple of times before giving up.",
   "- BE HONEST — NEVER GUESS OR LIE. Do not fabricate success, data, results, prices, quotes, or sources. If, after genuinely using your tools, you still cannot verify a fact or complete an action (a site blocks access, an app can't be driven silently, a file is binary), say so plainly — a truthful 'I searched but couldn't confirm X' or 'I couldn't do X because Y' is ALWAYS better than a confident made-up answer.",
@@ -1246,6 +1253,8 @@ async function callGemini(
   const url = `${await genEndpoint()}?key=${encodeURIComponent(apiKey)}`;
   const payload: Record<string, unknown> = { contents, systemInstruction };
   if (withTools) payload.tools = activeTools;
+  // Pro: dynamic thinking budget — the model decides how hard to think per query.
+  if (proMode) payload.generationConfig = { thinkingConfig: { thinkingBudget: -1 } };
 
   let res: Response;
   // Combine the caller's abort with a hard request deadline so the call can't
@@ -1291,7 +1300,12 @@ async function streamModelTurn(
   if (!apiKey) throw new Error("No Gemini API key. Add it in Settings.");
   const model = (await getModel()) || DEFAULT_MODEL;
   const url = `${GEMINI_BASE}${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
-  const body = JSON.stringify({ contents, tools: activeTools, systemInstruction });
+  const body = JSON.stringify({
+    contents,
+    tools: activeTools,
+    systemInstruction,
+    ...(proMode ? { generationConfig: { thinkingConfig: { thinkingBudget: -1 } } } : {}),
+  });
 
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
   let res: Awaited<ReturnType<typeof expoFetch>>;
@@ -1517,6 +1531,8 @@ async function callOpenAi(
     const tools = toOpenAiTools();
     if (tools.length) body.tools = tools;
   }
+  // Pro: raise reasoning effort — only on reasoning models (others 400 on it).
+  if (proMode && isOpenAiReasoningModel(cfg.model || "")) body.reasoning_effort = "high";
   const base = cfg.baseUrl.replace(/\/+$/, "");
   let res: Response;
   try {
@@ -1621,6 +1637,10 @@ async function callAnthropic(
     system: systemTextOf(systemInstruction),
     messages: toAnthropicMessages(contents),
   };
+  // NOTE: Claude extended thinking is intentionally NOT enabled here — with tool
+  // use it requires echoing thinking blocks back across turns (like Gemini's
+  // thought_signature), which our message reconstruction doesn't yet do. Claude
+  // reasons well by default; pick a thinking-capable model for more.
   if (withTools) {
     const tools = toAnthropicTools();
     if (tools.length) body.tools = tools;
@@ -1925,21 +1945,21 @@ export async function runAgentTurn(
       return { contents: history, reply, title };
     }
 
-    const responseParts: Part[] = [];
+    // Decide confirmations SEQUENTIALLY (so dialogs never overlap), then run the
+    // approved tools CONCURRENTLY — multi-tool turns finish in parallel with no
+    // extra model requests.
+    type Plan = { call: FunctionCall; executor?: ToolExecutor; isMcp: boolean; declined: boolean; unknown: boolean };
+    const plans: Plan[] = [];
     for (const call of calls) {
       if (signal?.aborted) throw new AbortedError();
-      setStatus(statusFor(call));
+      const isMcp = McpClient.isMcpTool(call.name);
       const executor = TOOL_EXECUTORS[call.name];
-      let result: Record<string, unknown>;
-      if (McpClient.isMcpTool(call.name)) {
-        try {
-          result = await McpClient.callMcpTool(call.name, call.args ?? {});
-        } catch (err) {
-          result = { ok: false, error: String(err) };
-        }
-      } else if (!executor) {
-        result = { ok: false, error: `Unknown tool: ${call.name}` };
-      } else {
+      if (!isMcp && !executor) {
+        plans.push({ call, isMcp, declined: false, unknown: true });
+        continue;
+      }
+      let declined = false;
+      if (!isMcp) {
         // Confirm EVERY state-changing / outward action before executing it.
         const method = String(call.args?.method ?? "GET").toUpperCase();
         const a = call.args ?? {};
@@ -1995,17 +2015,34 @@ export async function runAgentTurn(
           confirmUrl = `${String(a.repo ?? "")} · patch`;
         }
         if (needsConfirm && callbacks.confirmWrite && !(await callbacks.confirmWrite({ method: confirmMethod, url: confirmUrl }))) {
-          result = { ok: false, error: "The user declined this request. Do not retry it; ask them what to do instead." };
-        } else {
-          try {
-            result = await executor(call.args ?? {}, signal);
-          } catch (err) {
-            if (signal?.aborted) throw new AbortedError();
-            result = { ok: false, error: String(err) };
-          }
+          declined = true;
         }
       }
-      result = redactResult(result, secrets);
+      plans.push({ call, executor, isMcp, declined, unknown: false });
+    }
+
+    const execPlan = async (p: Plan): Promise<Record<string, unknown>> => {
+      if (p.unknown) return { ok: false, error: `Unknown tool: ${p.call.name}` };
+      if (p.declined) return { ok: false, error: "The user declined this request. Do not retry it; ask them what to do instead." };
+      try {
+        if (p.isMcp) return await McpClient.callMcpTool(p.call.name, p.call.args ?? {});
+        return await p.executor!(p.call.args ?? {}, signal);
+      } catch (err) {
+        if (signal?.aborted) throw new AbortedError();
+        return { ok: false, error: String(err) };
+      }
+    };
+
+    // The MODEL decides sequencing: tools it emits TOGETHER in one response are
+    // independent and run concurrently; dependent steps it emits across separate
+    // turns (so they're already serialized). The system prompt states this rule.
+    setStatus(plans.length > 1 ? `Running ${plans.length} tools...` : statusFor(plans[0].call));
+    const results = await Promise.all(plans.map(execPlan));
+
+    const responseParts: Part[] = [];
+    for (let i = 0; i < plans.length; i++) {
+      const call = plans[i].call;
+      const result = redactResult(results[i], secrets);
       // A credential was just stored → purge its raw value from the transcript.
       if (call.name === "save_secret" && result.ok) {
         const v = String(call.args?.value ?? "");

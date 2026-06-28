@@ -3,6 +3,7 @@
 // mcp__<serverId>__<tool> so the agent can route calls back here.
 
 import { FunctionDeclaration, ParamSchema } from "../types";
+import { getProMode } from "../storage/SecureStorage";
 import * as Store from "./McpStore";
 
 const PROTOCOL = "2025-06-18";
@@ -176,7 +177,8 @@ export async function callMcpTool(fullName: string, args: Record<string, unknown
     const content = Array.isArray(res?.content)
       ? res.content.map((c: any) => (typeof c?.text === "string" ? c.text : JSON.stringify(c))).join("\n")
       : JSON.stringify(res ?? {});
-    return { ok: !res?.isError, content: content.slice(0, 12000) };
+    const cap = (await getProMode()) ? 24000 : 12000; // Pro: fuller MCP output
+    return { ok: !res?.isError, content: content.slice(0, cap) };
   } catch (e) {
     return { ok: false, error: String(e) };
   }
