@@ -4,7 +4,7 @@
 // API calls. The agent references these secrets by NAME ({{NAME}}), so the raw
 // values are never sent to Gemini.
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -123,6 +123,46 @@ export default function SettingsScreen() {
   const [shellEnabled, setShellEnabledState] = useState(false);
   const [confirmSystem, setConfirmSystemState] = useState(true);
 
+  // Latest form values + a "loaded" flag, so we can auto-save on leave (a cleanup
+  // closure would otherwise capture stale initial state).
+  const loadedRef = useRef(false);
+  const latest = useRef({
+    geminiKey,
+    model,
+    provider,
+    openaiBase,
+    openaiKey,
+    openaiModel,
+    anthropicKey,
+    anthropicModel,
+    backgroundRun,
+    shellEnabled,
+    confirmSystem,
+    githubToken,
+    writeMode,
+    systemPrompt,
+    userNotes,
+    secrets,
+  });
+  latest.current = {
+    geminiKey,
+    model,
+    provider,
+    openaiBase,
+    openaiKey,
+    openaiModel,
+    anthropicKey,
+    anthropicModel,
+    backgroundRun,
+    shellEnabled,
+    confirmSystem,
+    githubToken,
+    writeMode,
+    systemPrompt,
+    userNotes,
+    secrets,
+  };
+
   useEffect(() => {
     (async () => {
       setGeminiKey(await getGeminiKey());
@@ -148,7 +188,16 @@ export default function SettingsScreen() {
       setSecrets(await loadSecrets());
       setErrorGroups(await listErrorsByThread());
       setLoading(false);
+      loadedRef.current = true;
     })();
+  }, []);
+
+  // Auto-save when leaving the screen, so dropdown/provider/toggle changes stick
+  // even if the user doesn't tap Save. Guarded so we never write before load.
+  useEffect(() => {
+    return () => {
+      if (loadedRef.current) void persistSettings(latest.current);
+    };
   }, []);
 
   async function refreshShizuku() {
@@ -184,22 +233,26 @@ export default function SettingsScreen() {
     setSecrets((prev) => prev.filter((s) => s.name !== name));
   }
 
+  async function persistSettings(v: typeof latest.current) {
+    await saveAll(v.geminiKey, v.secrets);
+    await saveModel(v.model);
+    await saveProvider(v.provider);
+    await saveOpenAiConfig({ baseUrl: v.openaiBase, apiKey: v.openaiKey, model: v.openaiModel });
+    await saveAnthropicConfig({ apiKey: v.anthropicKey, model: v.anthropicModel });
+    await saveBackgroundRun(v.backgroundRun);
+    await saveShellEnabled(v.shellEnabled);
+    await saveConfirmSystemActions(v.confirmSystem);
+    await saveGithubToken(v.githubToken);
+    await saveWriteMode(v.writeMode);
+    await saveSystemPrompt(v.systemPrompt);
+    await saveUserNotes(v.userNotes);
+  }
+
   async function onSave() {
     setSaving(true);
     setStatus(null);
     try {
-      await saveAll(geminiKey, secrets);
-      await saveModel(model);
-      await saveProvider(provider);
-      await saveOpenAiConfig({ baseUrl: openaiBase, apiKey: openaiKey, model: openaiModel });
-      await saveAnthropicConfig({ apiKey: anthropicKey, model: anthropicModel });
-      await saveBackgroundRun(backgroundRun);
-      await saveShellEnabled(shellEnabled);
-      await saveConfirmSystemActions(confirmSystem);
-      await saveGithubToken(githubToken);
-      await saveWriteMode(writeMode);
-      await saveSystemPrompt(systemPrompt);
-      await saveUserNotes(userNotes);
+      await persistSettings(latest.current);
       setStatus("Saved securely on this device.");
     } catch (err) {
       setStatus(`Save failed: ${String(err)}`);
