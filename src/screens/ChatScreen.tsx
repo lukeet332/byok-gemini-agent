@@ -141,9 +141,19 @@ interface Props {
   onOpenSettings: () => void; // navigate to Settings (for tappable notices)
   initialText?: string; // text shared into the app, to pre-fill the composer
   onShareConsumed?: () => void;
+  initialSend?: string; // a routine prompt to auto-send once the thread loads
+  onSendConsumed?: () => void;
 }
 
-export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings, initialText, onShareConsumed }: Props) {
+export default function ChatScreen({
+  threadId,
+  onThreadChanged,
+  onOpenSettings,
+  initialText,
+  onShareConsumed,
+  initialSend,
+  onSendConsumed,
+}: Props) {
   const [thread, setThread] = useState<Thread | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -404,6 +414,17 @@ export default function ChatScreen({ threadId, onThreadChanged, onOpenSettings, 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialText]);
+
+  // Auto-send a routine's prompt once the thread has loaded (one-tap routines).
+  const autoSentRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (initialSend && thread && autoSentRef.current !== thread.id) {
+      autoSentRef.current = thread.id;
+      handleSendMessage(initialSend);
+      onSendConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSend, thread]);
 
   function scrollToEnd() {
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));

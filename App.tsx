@@ -33,6 +33,8 @@ export default function App() {
   const [splashDone, setSplashDone] = useState(false);
   // Text shared into Fraude from another app (via "Share → Fraude").
   const [sharedText, setSharedText] = useState<string | null>(null);
+  // A saved-routine prompt to auto-send in a fresh chat.
+  const [routinePrompt, setRoutinePrompt] = useState<string | null>(null);
 
   useEffect(() => {
     hasModelAccess().then(setReady);
@@ -43,6 +45,10 @@ export default function App() {
     setView("chat");
   }
   function newChat() {
+    openThread(newThreadId());
+  }
+  function runRoutine(prompt: string) {
+    setRoutinePrompt(prompt);
     openThread(newThreadId());
   }
 
@@ -91,7 +97,7 @@ export default function App() {
 
         <View style={styles.screen}>
           {view === "list" ? (
-            <ThreadListScreen onOpen={openThread} onNew={newChat} />
+            <ThreadListScreen onOpen={openThread} onNew={newChat} onRunRoutine={runRoutine} />
           ) : view === "chat" && activeThreadId ? (
             <ChatScreen
               threadId={activeThreadId}
@@ -99,6 +105,8 @@ export default function App() {
               onOpenSettings={() => setView("settings")}
               initialText={sharedText ?? undefined}
               onShareConsumed={() => setSharedText(null)}
+              initialSend={routinePrompt ?? undefined}
+              onSendConsumed={() => setRoutinePrompt(null)}
             />
           ) : (
             <SettingsScreen />
