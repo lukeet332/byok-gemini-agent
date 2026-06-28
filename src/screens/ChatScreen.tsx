@@ -65,14 +65,16 @@ interface Queued {
   image?: { uri: string; data: string; mimeType: string };
 }
 
-// Pick the most natural en-GB voice available (Enhanced = neural, if the device
-// has it installed via Google TTS). Falls back to any English voice.
+// Pick the most natural en-GB voice (Enhanced = neural). We deliberately do NOT
+// fall back to other English locales — pinning a US voice is what made it sound
+// American. If no en-GB voice is installed, return undefined and just request the
+// "en-GB" language so the engine uses its own British default.
 function bestVoiceId(voices: Speech.Voice[]): string | undefined {
-  const en = voices.filter((v) => (v.language || "").toLowerCase().startsWith("en"));
-  const gb = en.filter((v) => (v.language || "").toLowerCase().startsWith("en-gb"));
-  const pool = gb.length ? gb : en;
-  const enhanced = pool.find((v) => v.quality === Speech.VoiceQuality.Enhanced);
-  return (enhanced ?? pool[0])?.identifier;
+  const norm = (l: string | undefined) => (l || "").toLowerCase().replace(/_/g, "-");
+  const gb = voices.filter((v) => norm(v.language).startsWith("en-gb"));
+  if (!gb.length) return undefined;
+  const enhanced = gb.find((v) => v.quality === Speech.VoiceQuality.Enhanced);
+  return (enhanced ?? gb[0]).identifier;
 }
 
 // Derive a thread title locally (no API call) from the first user message.
@@ -160,6 +162,7 @@ export default function ChatScreen({
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
+  const [micLevel, setMicLevel] = useState(0); // 0..1 live input loudness
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<{ uri: string; data: string; mimeType: string } | null>(null);
   const [autoMode, setAutoModeState] = useState(false);
@@ -318,8 +321,20 @@ export default function ChatScreen({
       voiceInputRef.current = true; // dictated → reply will be spoken
     }
   });
-  useSpeechRecognitionEvent("end", () => setListening(false));
-  useSpeechRecognitionEvent("error", () => setListening(false));
+  // Live mic feedback: volumechange gives a loudness value (~ -2..10); normalise
+  // to 0..1 to drive the on-screen level meter so the user can see it's hearing.
+  useSpeechRecognitionEvent("volumechange", (e) => {
+    const v = typeof e.value === "number" ? e.value : 0;
+    setMicLevel(Math.max(0, Math.min(1, (v + 2) / 12)));
+  });
+  useSpeechRecognitionEvent("end", () => {
+    setListening(false);
+    setMicLevel(0);
+  });
+  useSpeechRecognitionEvent("error", () => {
+    setListening(false);
+    setMicLevel(0);
+  });
 
   async function toggleMic() {
     if (listening) {
@@ -340,6 +355,7 @@ export default function ChatScreen({
     } catch {
       // fall back to the default service
     }
+    setMicLevel(0);
     ExpoSpeechRecognitionModule.start({
       lang: "en-GB",
       interimResults: true,
@@ -347,6 +363,7 @@ export default function ChatScreen({
       requiresOnDeviceRecognition: false, // use the network/Google recognizer
       addsPunctuation: true,
       androidRecognitionServicePackage: googleService,
+      volumeChangeEventOptions: { enabled: true, intervalMillis: 120 },
       androidIntentOptions: {
         EXTRA_LANGUAGE_MODEL: "free_form",
         EXTRA_PREFER_OFFLINE: false,
@@ -750,6 +767,19 @@ export default function ChatScreen({
             placeholderTextColor={theme.textDim}
             multiline
           />
+          {listening ? (
+            <View style={styles.levelMeter}>
+              {[0.15, 0.35, 0.6, 0.85].map((th, i) => (
+                <View
+                  key={i}
+                  style={[
+                    styles.levelBar,
+                    { height: 5 + th * 16, opacity: micLevel >= th ? 1 : 0.25 },
+                  ]}
+                />
+              ))}
+            </View>
+          ) : null}
           <TouchableOpacity onPress={toggleMic} disabled={busy} hitSlop={8}>
             <Ionicons name={listening ? "stop-circle" : "mic"} size={22} color={listening ? theme.danger : theme.textDim} />
           </TouchableOpacity>
@@ -929,6 +959,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   composerTop: { flexDirection: "row", alignItems: "flex-end", gap: 10, paddingBottom: 8 },
+  levelMeter: { flexDirection: "row", alignItems: "flex-end", gap: 3, height: 24, paddingBottom: 2 },
+  levelBar: { width: 3.5, borderRadius: 2, backgroundColor: theme.accent },
   composerInput: { flex: 1, color: theme.text, fontSize: 16, minHeight: 36, maxHeight: 150, paddingTop: 4, paddingBottom: 4 },
   // Full-bleed divider (cancels the card's horizontal padding so it spans edge to edge).
   composerDivider: { height: 1, backgroundColor: theme.border, marginHorizontal: -14, marginBottom: 10 },
