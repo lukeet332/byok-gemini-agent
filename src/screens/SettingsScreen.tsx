@@ -57,9 +57,11 @@ import {
   hasAllFilesAccess,
   linuxTerminalStatus,
   LinuxTerminalStatus,
+  notificationsEnabled,
   openA11ySettings,
   openAppInfo,
   openLinuxTerminal,
+  openNotificationSettings,
   requestAllFilesAccess,
   requestShizukuPermission,
   shizukuStatus,
@@ -110,6 +112,7 @@ export default function SettingsScreen() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [shizuku, setShizuku] = useState<ShizukuStatus>({ running: false, granted: false });
   const [a11yOn, setA11yOn] = useState(false);
+  const [notifOn, setNotifOn] = useState(false);
   const [allFiles, setAllFiles] = useState(false);
   const [linux, setLinux] = useState<LinuxTerminalStatus>({ supported: false, available: false, sdk: 0 });
   const [userNotes, setUserNotes] = useState("");
@@ -186,6 +189,7 @@ export default function SettingsScreen() {
       setConfirmSystemState(await getConfirmSystemActions());
       setShizuku(await shizukuStatus());
       setA11yOn(a11yEnabled());
+      setNotifOn(notificationsEnabled());
       setAllFiles(hasAllFilesAccess());
       setLinux(linuxTerminalStatus());
       setGithubToken(await getGithubToken());
@@ -544,6 +548,20 @@ export default function SettingsScreen() {
             <Text style={styles.advBtnText}>App info (allow restricted)</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.advBtn} onPress={() => setA11yOn(a11yEnabled())}>
+            <Text style={styles.advBtnText}>Refresh</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.sectionLabel}>Notification access</Text>
+        <Text style={styles.hint}>
+          Let Fraude read incoming notifications so it can triage and summarise what's arrived ("what did I
+          miss?"). Grant it in the system Notification access screen. Status: {notifOn ? "on ✓" : "off"}.
+        </Text>
+        <View style={styles.advButtons}>
+          <TouchableOpacity style={styles.advBtn} onPress={() => openNotificationSettings()}>
+            <Text style={styles.advBtnText}>{notifOn ? "Notification access" : "Enable notification access"}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.advBtn} onPress={() => setNotifOn(notificationsEnabled())}>
             <Text style={styles.advBtnText}>Refresh</Text>
           </TouchableOpacity>
         </View>

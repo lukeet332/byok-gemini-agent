@@ -332,6 +332,17 @@ export const TOOLS: Tool[] = [
         },
       },
       {
+        name: "read_notifications",
+        description:
+          "Read the device's recent incoming notifications (app, title, text, time) so you can triage or " +
+          "summarise what's arrived — e.g. 'what have I missed?', 'any important messages?'. Only works if the " +
+          "user has granted Fraude notification access (Settings → Notification access).",
+        parameters: {
+          type: "object",
+          properties: { limit: { type: "integer", description: "How many recent notifications to read (default 30)." } },
+        },
+      },
+      {
         name: "schedule_reminder",
         description:
           "Schedule a reminder that pops a notification at a future time. Give the reminder text and EITHER " +
@@ -874,6 +885,13 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     const ok = await Shell.a11yGlobal(String(args.action ?? ""));
     return ok ? { ok: true } : { ok: false, error: "action must be back, home, recents, or notifications." };
   },
+  read_notifications: async (args) => {
+    if (!Shell.notificationsEnabled())
+      return { ok: false, error: "Notification access is off. The user can enable it in Settings → Notification access." };
+    const limit = typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : 30;
+    const items = await Shell.getRecentNotifications(limit);
+    return { ok: true, count: items.length, notifications: items };
+  },
   schedule_reminder: async (args) => {
     const text = String(args.text ?? "").trim();
     if (!text) return { ok: false, error: "Missing reminder text." };
@@ -1158,6 +1176,10 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
       " CHOOSING HOW TO ACT (pick the simplest that fully works, in this order): (1) a real API via http_request — most reliable and fully background; use it if the service has one and a key is stored. (2) A deep link / intent (open_link / send_android_intent) that completes the task in one shot — e.g. 'sms:'/'mailto:' with a body, 'tel:', a maps/spotify link. (3) Screen automation when there's no API/deep link, or to finish what a deep link only set up. MANY app actions are 'deep link to pre-fill + accessibility to finish': e.g. WhatsApp — open_link 'https://wa.me/<number>?text=<urlencoded>' (this opens the chat with the message typed), then ui_screen, ui_tap the 'Send' control by its text/description, then ui_global('home') to return to Fraude. Always ui_screen before tapping and again after, and verify the expected element exists before acting. tap/type ask the user to confirm unless Auto mode is on."
     : "\n\nScreen automation is OFF. If the user asks you to operate or automate another app's UI (tap/type/press buttons inside it — e.g. send a WhatsApp/Telegram message through the app), do NOT just refuse — tell them to enable it in Settings → Screen automation first, then retry. (You can still use direct deep links and APIs without it.)";
 
+  const notifLine = Shell.notificationsEnabled()
+    ? "\n\nNotification access is ON — use read_notifications to triage/summarise the user's recent incoming notifications when relevant."
+    : "";
+
   const mcp = McpClient.connectedSummary();
   const mcpLine = mcp
     ? `\n\nConnected MCP integrations — their tools are available to you (named mcp__<server>__<tool>); USE them whenever the request relates to that service: ${mcp}.`
@@ -1175,7 +1197,7 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
 
   return {
     role: "user",
-    parts: [{ text: base + timeBlock + secretsLine + shellLine + a11yLine + mcpLine + notesBlock + memoryBlock + memoBlock }],
+    parts: [{ text: base + timeBlock + secretsLine + shellLine + a11yLine + notifLine + mcpLine + notesBlock + memoryBlock + memoBlock }],
   };
 }
 
@@ -1711,6 +1733,7 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "write_file" || call.name === "create_file") return "Writing file...";
   if (call.name === "update_user_notes") return "Updating your notes...";
   if (call.name === "save_secret") return "Saving credential securely...";
+  if (call.name === "read_notifications") return "Reading notifications...";
   if (call.name === "schedule_reminder") return "Setting a reminder...";
   if (call.name === "list_reminders") return "Checking reminders...";
   if (call.name === "cancel_reminder") return "Cancelling reminder...";

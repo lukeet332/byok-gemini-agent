@@ -36,6 +36,16 @@ interface NativeShell {
   linuxTerminalStatus: () => { supported: boolean; available: boolean; sdk: number };
   openLinuxTerminal: () => boolean;
   getShareIntent: () => { text: string; subject: string } | null;
+  notificationsEnabled: () => boolean;
+  openNotificationSettings: () => boolean;
+  getRecentNotifications: (limit: number) => Promise<{ app: string; title: string; text: string; time: number }[]>;
+}
+
+export interface AppNotification {
+  app: string;
+  title: string;
+  text: string;
+  time: number;
 }
 
 export interface LinuxTerminalStatus {
@@ -188,5 +198,32 @@ export function getShareIntent(): { text: string; subject: string } | null {
     return native ? native.getShareIntent() : null;
   } catch {
     return null;
+  }
+}
+
+// ---- Notification access ----
+
+export function notificationsEnabled(): boolean {
+  try {
+    return native ? native.notificationsEnabled() : false;
+  } catch {
+    return false;
+  }
+}
+
+export function openNotificationSettings(): void {
+  try {
+    native?.openNotificationSettings();
+  } catch {
+    // ignore
+  }
+}
+
+export async function getRecentNotifications(limit = 30): Promise<AppNotification[]> {
+  if (!native) return [];
+  try {
+    return await native.getRecentNotifications(limit);
+  } catch {
+    return [];
   }
 }

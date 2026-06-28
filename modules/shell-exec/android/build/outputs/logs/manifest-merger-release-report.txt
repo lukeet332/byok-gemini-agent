@@ -1,13 +1,13 @@
 -- Merging decision tree log ---
 manifest
-ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-25:12
-INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-25:12
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-35:12
+INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:1-35:12
 	package
 		INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml
 	xmlns:android
 		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:1:11-69
 application
-ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:2:3-24:17
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:2:3-34:17
 provider#rikka.shizuku.ShizukuProvider
 ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:4:5-10:76
 	android:enabled
@@ -42,6 +42,20 @@ ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/sr
 		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:22:9-60
 	android:name
 		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:21:9-52
+service#expo.modules.shellexec.FraudeNotificationListenerService
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:26:5-33:15
+	android:exported
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:29:7-31
+	android:permission
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:28:7-81
+	android:name
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:27:7-78
+intent-filter#action:name:android.service.notification.NotificationListenerService
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:30:7-32:23
+action#android.service.notification.NotificationListenerService
+ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:31:9-91
+	android:name
+		ADDED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:31:17-88
 uses-sdk
 INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml reason: use-sdk injection requested
 INJECTED from /Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml

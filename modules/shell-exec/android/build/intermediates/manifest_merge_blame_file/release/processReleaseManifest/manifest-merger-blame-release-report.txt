@@ -5,7 +5,7 @@
 5    <uses-sdk android:minSdkVersion="24" />
 6
 7    <application>
-7-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:2:3-24:17
+7-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:2:3-34:17
 8
 9        <!-- Required for the Shizuku binder to reach this app. -->
 10        <provider
@@ -46,6 +46,23 @@
 29                android:resource="@xml/fraude_accessibility_config" />
 29-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:22:9-60
 30        </service>
-31    </application>
-32
-33</manifest>
+31
+32        <!-- Reads incoming notifications; user grants in Notification access. -->
+33        <service
+33-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:26:5-33:15
+34            android:name="expo.modules.shellexec.FraudeNotificationListenerService"
+34-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:27:7-78
+35            android:exported="false"
+35-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:29:7-31
+36            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" >
+36-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:28:7-81
+37            <intent-filter>
+37-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:30:7-32:23
+38                <action android:name="android.service.notification.NotificationListenerService" />
+38-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:31:9-91
+38-->/Users/luke/Documents/byok-gemini-agent/modules/shell-exec/android/src/main/AndroidManifest.xml:31:17-88
+39            </intent-filter>
+40        </service>
+41    </application>
+42
+43</manifest>

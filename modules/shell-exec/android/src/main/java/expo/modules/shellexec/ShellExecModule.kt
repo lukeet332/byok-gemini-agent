@@ -157,6 +157,25 @@ class ShellExecModule : Module() {
       if (text.isNullOrBlank()) null else mapOf("text" to text, "subject" to (subject ?: ""))
     }
 
+    // ---- Notification access (read incoming notifications) ----
+
+    Function("notificationsEnabled") {
+      val ctx = appContext.reactContext ?: return@Function false
+      val flat = Settings.Secure.getString(ctx.contentResolver, "enabled_notification_listeners") ?: return@Function false
+      flat.contains(ctx.packageName)
+    }
+
+    Function("openNotificationSettings") {
+      val ctx = appContext.reactContext ?: return@Function false
+      ctx.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+      true
+    }
+
+    AsyncFunction("getRecentNotifications") { limit: Int ->
+      val n = if (limit in 1..60) limit else 30
+      FraudeNotificationListenerService.recent.toList().take(n)
+    }
+
     // ---- Accessibility-based UI automation (no root / Shizuku needed) ----
 
     // Is our accessibility service enabled in system settings?
