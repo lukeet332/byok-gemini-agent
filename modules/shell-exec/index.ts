@@ -32,6 +32,14 @@ interface NativeShell {
   a11yGlobal: (action: string) => Promise<boolean>;
   hasAllFilesAccess: () => boolean;
   requestAllFilesAccess: () => boolean;
+  linuxTerminalStatus: () => { supported: boolean; available: boolean; sdk: number };
+  openLinuxTerminal: () => boolean;
+}
+
+export interface LinuxTerminalStatus {
+  supported: boolean;
+  available: boolean;
+  sdk: number;
 }
 
 let native: NativeShell | null = null;
@@ -142,6 +150,23 @@ export function hasAllFilesAccess(): boolean {
 export function requestAllFilesAccess(): void {
   try {
     native?.requestAllFilesAccess();
+  } catch {
+    // ignore
+  }
+}
+
+// Android 16+ native Linux Terminal (full Debian VM).
+export function linuxTerminalStatus(): LinuxTerminalStatus {
+  try {
+    return native ? native.linuxTerminalStatus() : { supported: false, available: false, sdk: 0 };
+  } catch {
+    return { supported: false, available: false, sdk: 0 };
+  }
+}
+
+export function openLinuxTerminal(): void {
+  try {
+    native?.openLinuxTerminal();
   } catch {
     // ignore
   }

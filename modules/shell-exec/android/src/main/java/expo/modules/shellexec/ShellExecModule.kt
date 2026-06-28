@@ -107,6 +107,42 @@ class ShellExecModule : Module() {
       true
     }
 
+    // Android 16+ native Linux Terminal (AVF Debian VM) — a full Linux env for
+    // coding. We can detect/launch it; driving it programmatically needs an SSH
+    // bridge the user sets up inside the VM.
+    Function("linuxTerminalStatus") {
+      val ctx = appContext.reactContext
+      val supported = Build.VERSION.SDK_INT >= 36
+      var available = false
+      if (ctx != null) {
+        for (p in listOf("com.android.virtualization.terminal", "com.google.android.virtualization.terminal")) {
+          try {
+            ctx.packageManager.getPackageInfo(p, 0)
+            available = true
+            break
+          } catch (_: Throwable) {}
+        }
+      }
+      mapOf("supported" to supported, "available" to available, "sdk" to Build.VERSION.SDK_INT)
+    }
+
+    Function("openLinuxTerminal") {
+      val ctx = appContext.reactContext ?: return@Function false
+      for (p in listOf("com.android.virtualization.terminal", "com.google.android.virtualization.terminal")) {
+        val intent = ctx.packageManager.getLaunchIntentForPackage(p)
+        if (intent != null) {
+          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          ctx.startActivity(intent)
+          return@Function true
+        }
+      }
+      // Not installed/enabled → open Developer options to enable the Linux env.
+      try {
+        ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+      } catch (_: Throwable) {}
+      true
+    }
+
     // ---- Accessibility-based UI automation (no root / Shizuku needed) ----
 
     // Is our accessibility service enabled in system settings?

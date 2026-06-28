@@ -54,7 +54,10 @@ import { requestNotificationPermission } from "../agent/Background";
 import {
   a11yEnabled,
   hasAllFilesAccess,
+  linuxTerminalStatus,
+  LinuxTerminalStatus,
   openA11ySettings,
+  openLinuxTerminal,
   requestAllFilesAccess,
   requestShizukuPermission,
   shizukuStatus,
@@ -106,6 +109,7 @@ export default function SettingsScreen() {
   const [shizuku, setShizuku] = useState<ShizukuStatus>({ running: false, granted: false });
   const [a11yOn, setA11yOn] = useState(false);
   const [allFiles, setAllFiles] = useState(false);
+  const [linux, setLinux] = useState<LinuxTerminalStatus>({ supported: false, available: false, sdk: 0 });
   const [userNotes, setUserNotes] = useState("");
   // Live model list from Google (null = loading/failed -> use presets).
   const [modelMenu, setModelMenu] = useState(false);
@@ -181,6 +185,7 @@ export default function SettingsScreen() {
       setShizuku(await shizukuStatus());
       setA11yOn(a11yEnabled());
       setAllFiles(hasAllFilesAccess());
+      setLinux(linuxTerminalStatus());
       setGithubToken(await getGithubToken());
       setWriteMode(await getWriteMode());
       setSystemPrompt(await getSystemPrompt());
@@ -752,6 +757,25 @@ export default function SettingsScreen() {
                 </TouchableOpacity>
               ) : null}
             </View>
+
+            <Text style={styles.smallLabel}>Native Linux terminal (Android 16+)</Text>
+            <Text style={styles.hint}>
+              {linux.supported
+                ? linux.available
+                  ? "Your device has the native Linux Terminal — a full Debian VM with apt and real toolchains. The best place for heavy local coding. (To let Fraude run commands inside it, run an SSH server in the VM — bridge coming.)"
+                  : "Your device supports the native Linux Terminal (Android 16+). Enable it in Developer options → Linux development environment, then it's a full Debian VM for coding."
+                : `Not available on this device (Android 16+ only; you're on API ${linux.sdk || "?"}). Use Termux above instead.`}
+            </Text>
+            {linux.supported ? (
+              <View style={styles.advButtons}>
+                <TouchableOpacity style={styles.advBtn} onPress={() => openLinuxTerminal()}>
+                  <Text style={styles.advBtnText}>{linux.available ? "Open Linux Terminal" : "Enable in Developer options"}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.advBtn} onPress={() => setLinux(linuxTerminalStatus())}>
+                  <Text style={styles.advBtnText}>Refresh</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
 
             <Text style={styles.smallLabel}>Root</Text>
             <Text style={styles.hint}>
