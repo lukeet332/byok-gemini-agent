@@ -33,6 +33,7 @@ import {
 import { appendError } from "../storage/ErrorLogStore";
 import { getUserNotes, saveUserNotes } from "../storage/UserNotes";
 import * as Memory from "../storage/MemoryStore";
+import * as Background from "./Background";
 import { BrowserEngine } from "../browser/BrowserEngine";
 import * as Device from "../device/DeviceTools";
 import * as Files from "../device/FileTools";
@@ -328,6 +329,36 @@ export const TOOLS: Tool[] = [
           type: "object",
           properties: { notes: { type: "string", description: "The full updated notes (markdown)." } },
           required: ["notes"],
+        },
+      },
+      {
+        name: "schedule_reminder",
+        description:
+          "Schedule a reminder that pops a notification at a future time. Give the reminder text and EITHER " +
+          "'at' (an ISO 8601 datetime — compute it from the current local time given in your instructions) OR " +
+          "'inMinutes'. Use for 'remind me…', alarms, nudges, a morning prompt, etc.",
+        parameters: {
+          type: "object",
+          properties: {
+            text: { type: "string", description: "What to remind the user." },
+            at: { type: "string", description: "ISO 8601 datetime, e.g. 2026-06-29T07:00:00." },
+            inMinutes: { type: "number", description: "Alternatively, fire this many minutes from now." },
+          },
+          required: ["text"],
+        },
+      },
+      {
+        name: "list_reminders",
+        description: "List the user's scheduled reminders (id + text).",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        name: "cancel_reminder",
+        description: "Cancel a scheduled reminder by its id (from list_reminders).",
+        parameters: {
+          type: "object",
+          properties: { id: { type: "string", description: "Reminder id to cancel." } },
+          required: ["id"],
         },
       },
       {
@@ -843,6 +874,33 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     const ok = await Shell.a11yGlobal(String(args.action ?? ""));
     return ok ? { ok: true } : { ok: false, error: "action must be back, home, recents, or notifications." };
   },
+  schedule_reminder: async (args) => {
+    const text = String(args.text ?? "").trim();
+    if (!text) return { ok: false, error: "Missing reminder text." };
+    let whenMs: number;
+    if (typeof args.inMinutes === "number" && args.inMinutes > 0) {
+      whenMs = Date.now() + args.inMinutes * 60000;
+    } else if (typeof args.at === "string" && args.at.trim()) {
+      const t = Date.parse(args.at);
+      if (Number.isNaN(t)) return { ok: false, error: "Couldn't parse 'at' — use ISO 8601 (or pass inMinutes)." };
+      whenMs = t;
+    } else {
+      return { ok: false, error: "Provide 'at' (ISO datetime) or 'inMinutes'." };
+    }
+    if (whenMs <= Date.now() + 1000) return { ok: false, error: "That time is in the past." };
+    const id = await Background.scheduleReminder(text, whenMs);
+    return id
+      ? { ok: true, id, at: new Date(whenMs).toString() }
+      : { ok: false, error: "Couldn't schedule — the user may need to allow notifications." };
+  },
+  list_reminders: async () => {
+    const r = await Background.listReminders();
+    return { ok: true, count: r.length, reminders: r };
+  },
+  cancel_reminder: async (args) => {
+    const ok = await Background.cancelReminder(String(args.id ?? ""));
+    return ok ? { ok: true } : { ok: false, error: "Couldn't cancel / no such id." };
+  },
   memory_save: async (args) => {
     const tags = Array.isArray(args.tags) ? (args.tags as unknown[]).map(String) : [];
     const e = await Memory.addMemory(String(args.text ?? ""), tags, Date.now());
@@ -1113,9 +1171,11 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
   const memCount = await Memory.memoryCount().catch(() => 0);
   const memoryBlock = `\n\nLong-term memory: ${memCount} saved item(s). Use memory_save to remember discrete facts/items/lists/tasks for future chats, and memory_search to recall them when the user refers to something you might have stored. (This is for facts/items; tone/style preferences go in update_user_notes.)`;
 
+  const timeBlock = `\n\nCurrent local time: ${new Date().toString()}. Use this for any date/time reasoning. To set reminders/alarms/nudges, use schedule_reminder (compute the ISO 'at' from this time, or pass inMinutes).`;
+
   return {
     role: "user",
-    parts: [{ text: base + secretsLine + shellLine + a11yLine + mcpLine + notesBlock + memoryBlock + memoBlock }],
+    parts: [{ text: base + timeBlock + secretsLine + shellLine + a11yLine + mcpLine + notesBlock + memoryBlock + memoBlock }],
   };
 }
 
@@ -1651,6 +1711,9 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "write_file" || call.name === "create_file") return "Writing file...";
   if (call.name === "update_user_notes") return "Updating your notes...";
   if (call.name === "save_secret") return "Saving credential securely...";
+  if (call.name === "schedule_reminder") return "Setting a reminder...";
+  if (call.name === "list_reminders") return "Checking reminders...";
+  if (call.name === "cancel_reminder") return "Cancelling reminder...";
   if (call.name === "memory_save") return "Saving to memory...";
   if (call.name === "memory_search") return "Recalling from memory...";
   if (call.name === "memory_list") return "Reading memory...";

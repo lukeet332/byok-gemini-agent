@@ -40,6 +40,38 @@ export async function requestNotificationPermission(): Promise<void> {
   await ensureNotifications();
 }
 
+// ---- Reminders (scheduled local notifications) ----
+
+export async function scheduleReminder(text: string, whenMs: number): Promise<string | null> {
+  await ensureNotifications();
+  try {
+    return await Notifications.scheduleNotificationAsync({
+      content: { title: "Fraude reminder", body: text },
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: new Date(whenMs) },
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function listReminders(): Promise<{ id: string; body: string }[]> {
+  try {
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    return scheduled.map((s) => ({ id: s.identifier, body: s.content.body ?? "" }));
+  } catch {
+    return [];
+  }
+}
+
+export async function cancelReminder(id: string): Promise<boolean> {
+  try {
+    await Notifications.cancelScheduledNotificationAsync(id);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Notify the user a reply landed (used when the turn finished while backgrounded).
 export async function notifyTurnDone(title: string, reply: string): Promise<void> {
   await ensureNotifications();
