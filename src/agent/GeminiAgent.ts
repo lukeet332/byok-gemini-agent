@@ -1273,6 +1273,7 @@ async function streamModelTurn(
   const decoder = new TextDecoder();
   let buf = "";
   let textAcc = "";
+  let textSignature: string | undefined; // thought_signature riding on a text part
   let chunks = 0;
   const calls: Part[] = [];
 
@@ -1288,9 +1289,12 @@ async function streamModelTurn(
       if (typeof p.text === "string") {
         chunks += 1;
         textAcc += p.text;
+        if (p.thoughtSignature) textSignature = p.thoughtSignature;
         onToken?.(textAcc);
       }
-      if (p.functionCall) calls.push({ functionCall: p.functionCall });
+      // Preserve Gemini 2.5's thought_signature on the function-call part — it
+      // must be echoed back or the next request errors.
+      if (p.functionCall) calls.push({ functionCall: p.functionCall, thoughtSignature: p.thoughtSignature });
     }
   };
 
@@ -1316,7 +1320,7 @@ async function streamModelTurn(
 
   void chunks;
   const finalParts: Part[] = [];
-  if (textAcc) finalParts.push({ text: textAcc });
+  if (textAcc) finalParts.push(textSignature ? { text: textAcc, thoughtSignature: textSignature } : { text: textAcc });
   finalParts.push(...calls);
   return { role: "model", parts: finalParts.length ? finalParts : [{ text: "" }] };
 }
@@ -1800,7 +1804,26 @@ export async function runAgentTurn(
     if (signal?.aborted) throw new AbortedError();
     setStatus("Thinking...");
     // Route to the configured backend (Gemini streams; others are single-shot).
-    const turn = await callModel(history, systemInstruction, signal, callbacks.onToken);
+    let turn: Content;
+    try {
+      turn = await callModel(history, systemInstruction, signal, callbacks.onToken);
+    } catch (err) {
+      // Log model-request failures to the error log too (not just tool failures),
+      // then rethrow so the UI shows its retry bubble.
+      if (!(err instanceof AbortedError) && ctx) {
+        try {
+          await appendError({
+            threadId: ctx.threadId,
+            threadTitle: ctx.threadTitle,
+            tool: "model request",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        } catch {
+          // logging must never mask the original error
+        }
+      }
+      throw err;
+    }
     history.push(turn);
 
     const calls = functionCallsIn(turn);

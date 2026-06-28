@@ -27,6 +27,10 @@ export interface Part {
   functionCall?: FunctionCall;
   functionResponse?: FunctionResponse;
   inlineData?: InlineData;
+  // Gemini 2.5 attaches an opaque thought signature to function-call (and some
+  // text) parts; it MUST be echoed back verbatim on the next request or tool
+  // use breaks ("Function call is missing a thought_signature").
+  thoughtSignature?: string;
 }
 
 // One turn in the conversation. This is the exact wire shape Gemini expects in
