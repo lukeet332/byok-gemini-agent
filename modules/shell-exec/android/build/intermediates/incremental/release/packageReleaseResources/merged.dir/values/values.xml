@@ -1,4 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="fraude_a11y_desc">Lets Fraude read the current screen and tap or type on your behalf, to automate apps (e.g. open WhatsApp and send a drafted message).</string>
-</resources>

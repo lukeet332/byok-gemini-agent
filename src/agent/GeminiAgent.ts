@@ -1196,7 +1196,10 @@ async function buildSystemInstruction(memo?: string, requestTitle = false): Prom
 
   const a11yLine = Shell.a11yEnabled()
     ? "\n\nSCREEN AUTOMATION is ENABLED (accessibility): ui_screen (read the current screen's elements), ui_tap({text|id}), ui_type({text}), ui_global({back|home|recents|notifications}) — drive ANY app by element text/id, not coordinates." +
-      " CHOOSING HOW TO ACT (pick the simplest that fully works, in this order): (1) a real API via http_request — most reliable and fully background; use it if the service has one and a key is stored. (2) A deep link / intent (open_link / send_android_intent) that completes the task in one shot — e.g. 'sms:'/'mailto:' with a body, 'tel:', a maps/spotify link. (3) Screen automation when there's no API/deep link, or to finish what a deep link only set up. MANY app actions are 'deep link to pre-fill + accessibility to finish': e.g. WhatsApp — open_link 'https://wa.me/<number>?text=<urlencoded>' (this opens the chat with the message typed), then ui_screen, ui_tap the 'Send' control by its text/description, then ui_global('home') to return to Fraude. Always ui_screen before tapping and again after, and verify the expected element exists before acting. tap/type ask the user to confirm unless Auto mode is on."
+      " CHOOSING HOW TO ACT (pick the simplest that fully works, in this order): (1) a real API via http_request — most reliable and fully background; use it if the service has one and a key is stored. (2) A deep link / intent (open_link / send_android_intent) that completes the task in one shot — e.g. 'sms:'/'mailto:' with a body, 'tel:', a maps/spotify link. (3) Screen automation when there's no API/deep link, or to finish what a deep link only set up. MANY app actions are 'deep link to pre-fill + accessibility to finish': e.g. WhatsApp — open_link 'https://wa.me/<number>?text=<urlencoded>' (this opens the chat with the message typed), then ui_screen, ui_tap the 'Send' control by its text/description, then ui_global('home') to return to Fraude. Always ui_screen before tapping and again after, and verify the expected element exists before acting." +
+      " SEND/SUBMIT BUTTONS often have NO visible text — their label is a description (e.g. 'Send', 'Send SMS') and the tappable element may be a parent with only a resource-id. ui_tap matches text OR description, so tap by the description ('Send') or the id from ui_screen; don't give up because there's no text label." +
+      " CRITICAL — confirm the action actually happened before you finish: after tapping Send, call ui_screen again and verify the message now appears as a sent bubble in the conversation (or the compose field is empty). ONLY then ui_global('home') and tell the user it was sent. If the message is still sitting unsent in the input, the tap missed — re-read the screen and tap Send again; if it still won't send, navigate home and tell the user honestly that you couldn't confirm it sent. Never claim success you haven't verified on-screen." +
+      " tap/type ask the user to confirm unless Auto mode is on."
     : "\n\nScreen automation is OFF. If the user asks you to operate or automate another app's UI (tap/type/press buttons inside it — e.g. send a WhatsApp/Telegram message through the app), do NOT just refuse — tell them to enable it in Settings → Screen automation first, then retry. (You can still use direct deep links and APIs without it.)";
 
   const notifLine = Shell.notificationsEnabled()
@@ -1753,9 +1756,10 @@ export interface AgentCallbacks {
   onToken?: (fullText: string) => void;
   // Abort the whole turn (Stop button).
   signal?: AbortSignal;
-  // Ask the user before a state-changing API call (POST/PUT/PATCH/DELETE).
-  // Resolve false to decline (the model is told and can adapt).
-  confirmWrite?: (req: { method: string; url: string }) => Promise<boolean>;
+  // Ask the user before state-changing / outward actions. Receives the WHOLE
+  // batch of actions in one model response so a multi-step task is approved once
+  // (resolve false to decline them all; the model is told and can adapt).
+  confirmWrite?: (reqs: { method: string; url: string }[]) => Promise<boolean>;
 }
 
 export class AbortedError extends Error {
@@ -1910,6 +1914,13 @@ export async function runAgentTurn(
   const systemInstruction = await buildSystemInstruction(memo, requestTitle);
   const secrets = await collectSecretValues();
   const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+  // Once the user approves an app handoff (open_link / intent) that launches
+  // another app, that app is foregrounded — so a follow-up confirm dialog for
+  // ui_tap/ui_type can't render over it and the turn would hang ("thinking"
+  // forever). The launch approval already covers finishing the task in that app,
+  // so we pre-approve UI automation for the rest of the turn instead of popping a
+  // dialog that can never be seen.
+  let uiPreApproved = false;
 
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) throw new AbortedError();
@@ -1951,7 +1962,14 @@ export async function runAgentTurn(
     // Decide confirmations SEQUENTIALLY (so dialogs never overlap), then run the
     // approved tools CONCURRENTLY — multi-tool turns finish in parallel with no
     // extra model requests.
-    type Plan = { call: FunctionCall; executor?: ToolExecutor; isMcp: boolean; declined: boolean; unknown: boolean };
+    type Plan = {
+      call: FunctionCall;
+      executor?: ToolExecutor;
+      isMcp: boolean;
+      declined: boolean;
+      unknown: boolean;
+      confirm?: { method: string; url: string };
+    };
     const plans: Plan[] = [];
     for (const call of calls) {
       if (signal?.aborted) throw new AbortedError();
@@ -1961,9 +1979,9 @@ export async function runAgentTurn(
         plans.push({ call, isMcp, declined: false, unknown: true });
         continue;
       }
-      let declined = false;
+      let confirm: { method: string; url: string } | undefined;
       if (!isMcp) {
-        // Confirm EVERY state-changing / outward action before executing it.
+        // Flag EVERY state-changing / outward action so it can be confirmed.
         const method = String(call.args?.method ?? "GET").toUpperCase();
         const a = call.args ?? {};
         let needsConfirm = false;
@@ -1996,11 +2014,11 @@ export async function runAgentTurn(
           confirmMethod = "FILE";
           confirmUrl = "apply a git patch in the Termux session";
         } else if (call.name === "ui_tap") {
-          needsConfirm = true;
+          needsConfirm = !uiPreApproved;
           confirmMethod = "UI";
           confirmUrl = `tap ${String(a.text ?? a.id ?? "")}`;
         } else if (call.name === "ui_type") {
-          needsConfirm = true;
+          needsConfirm = !uiPreApproved;
           confirmMethod = "UI";
           confirmUrl = `type "${String(a.text ?? "")}"`;
         } else if (call.name === "update_setting") {
@@ -2017,11 +2035,26 @@ export async function runAgentTurn(
           confirmMethod = "COMMIT";
           confirmUrl = `${String(a.repo ?? "")} · patch`;
         }
-        if (needsConfirm && callbacks.confirmWrite && !(await callbacks.confirmWrite({ method: confirmMethod, url: confirmUrl }))) {
-          declined = true;
-        }
+        if (needsConfirm) confirm = { method: confirmMethod, url: confirmUrl };
       }
-      plans.push({ call, executor, isMcp, declined, unknown: false });
+      plans.push({ call, executor, isMcp, declined: false, unknown: false, confirm });
+    }
+
+    // BATCH the approval: a multi-step task asks once, not per-step. Tools the
+    // model emitted together in this response are confirmed in a single dialog.
+    const toConfirm = plans.filter((p) => p.confirm);
+    if (toConfirm.length && callbacks.confirmWrite) {
+      const ok = await callbacks.confirmWrite(toConfirm.map((p) => p.confirm!));
+      if (ok) {
+        // Approving an app handoff also authorises finishing the task inside that
+        // app — a per-tap confirm can't render once it's foregrounded (see
+        // uiPreApproved). Auto mode reaches here too (confirm auto-resolves true).
+        if (toConfirm.some((p) => p.call.name === "open_link" || p.call.name === "send_android_intent")) {
+          uiPreApproved = true;
+        }
+      } else {
+        toConfirm.forEach((p) => (p.declined = true));
+      }
     }
 
     const execPlan = async (p: Plan): Promise<Record<string, unknown>> => {

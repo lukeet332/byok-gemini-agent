@@ -31,3 +31,6 @@ yarn-error.*
 *.aab
 *.ipa
 *.xcarchive
+
+# Local Expo module build output (regenerated on build)
+modules/*/android/build/

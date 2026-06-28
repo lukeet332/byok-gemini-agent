@@ -212,6 +212,14 @@ export default function ChatScreen({
   const [autoMode, setAutoModeState] = useState(false);
   const [autoMenu, setAutoMenu] = useState(false);
   const [mcpVisible, setMcpVisible] = useState(false);
+  // Themed in-app confirmation (replaces the native Alert). Holds a BATCH of
+  // actions so a multi-step task is approved once, not step-by-step. `resolve` is
+  // the pending promise's resolver from confirmWrite.
+  const [confirmReq, setConfirmReq] = useState<{
+    items: { label: string; body: string }[];
+    danger: boolean;
+  } | null>(null);
+  const confirmResolveRef = useRef<((ok: boolean) => void) | null>(null);
   const autoModeRef = useRef(false);
   const voiceIdRef = useRef<string | undefined>(undefined);
 
@@ -330,34 +338,37 @@ export default function ChatScreen({
     return () => sub.remove();
   }, []);
 
-  function confirmWrite({ method, url }: { method: string; url: string }): Promise<boolean> {
-    // System-level shell (Shizuku/root) always confirms when that rail is on —
-    // even in Auto mode. Everything else: Auto mode bypasses the popup.
-    const isSystemAction = method === "SHELL" && /^\[(shizuku|root)\]/.test(url);
-    const mustConfirm = isSystemAction && confirmSystemRef.current;
+  // Approve a BATCH of actions in one prompt (a multi-step task asks once). Each
+  // entry is one pending tool call. System-level shell (Shizuku/root) always
+  // confirms when that rail is on — even in Auto mode; Auto mode bypasses the rest.
+  function confirmWrite(reqs: { method: string; url: string }[]): Promise<boolean> {
+    if (!reqs.length) return Promise.resolve(true);
+    const labels: Record<string, string> = {
+      INTENT: "Open another app",
+      OPEN: "Open a link",
+      FILE: "Write a file",
+      COMMIT: "Commit to GitHub",
+      SETTING: "Change a setting",
+      SHELL: "Run a shell command",
+      UI: "Automate your screen",
+    };
+    const isSystem = (r: { method: string; url: string }) => r.method === "SHELL" && /^\[(shizuku|root)\]/.test(r.url);
+    const mustConfirm = reqs.some((r) => isSystem(r) && confirmSystemRef.current);
     if (autoModeRef.current && !mustConfirm) return Promise.resolve(true);
-    const body =
-      method === "INTENT"
-        ? `The assistant wants to hand off to another app:\n\n${url}\n\nAllow it?`
-        : method === "FILE"
-          ? `The assistant wants to write to a file:\n\n${url}\n\nAllow it?`
-          : method === "OPEN"
-            ? `The assistant wants to open:\n\n${url}\n\nAllow it?`
-            : method === "COMMIT"
-              ? `The assistant wants to commit to GitHub:\n\n${url}\n\nAllow it?`
-              : method === "SETTING"
-                ? `The assistant wants to change a setting:\n\n${url}\n\nAllow it?`
-                : method === "SHELL"
-                  ? `The assistant wants to run a shell command on your device:\n\n${url}\n\nOnly allow commands you understand. Run it?`
-                  : method === "UI"
-                    ? `The assistant wants to automate your screen:\n\n${url}\n\nAllow it?`
-                    : `The assistant wants to send a ${method} request to:\n\n${url}\n\nThis can change data. Allow it?`;
+    const danger = reqs.some((r) => r.method === "SHELL" || r.method === "HTTP" || isSystem(r));
+    const items = reqs.map((r) => ({ label: labels[r.method] ?? `${r.method} request`, body: r.url }));
     return new Promise((resolve) => {
-      Alert.alert("Confirm action", body, [
-        { text: "Decline", style: "cancel", onPress: () => resolve(false) },
-        { text: "Allow", onPress: () => resolve(true) },
-      ], { cancelable: false });
+      confirmResolveRef.current = resolve;
+      setConfirmReq({ items, danger });
     });
+  }
+
+  // Resolve the themed confirm and close it.
+  function answerConfirm(ok: boolean) {
+    const resolve = confirmResolveRef.current;
+    confirmResolveRef.current = null;
+    setConfirmReq(null);
+    resolve?.(ok);
   }
 
   // Speech-to-text: stream the transcript into the input box.
@@ -869,6 +880,45 @@ export default function ChatScreen({
 
       <McpServersModal visible={mcpVisible} onClose={() => setMcpVisible(false)} />
 
+      <Modal visible={!!confirmReq} transparent animationType="fade" onRequestClose={() => answerConfirm(false)}>
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>
+              {(confirmReq?.items.length ?? 0) > 1 ? `Confirm ${confirmReq?.items.length} actions` : "Confirm action"}
+            </Text>
+            <Text style={styles.confirmDetail}>
+              {(confirmReq?.items.length ?? 0) > 1
+                ? "Fraude wants to do the following, in order:"
+                : "Fraude wants to:"}
+            </Text>
+            <ScrollView style={styles.confirmList} contentContainerStyle={{ gap: 10 }}>
+              {confirmReq?.items.map((it, i) => (
+                <View key={i} style={styles.confirmItem}>
+                  {(confirmReq?.items.length ?? 0) > 1 ? <Text style={styles.confirmStep}>{i + 1}</Text> : null}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.confirmItemLabel}>{it.label}</Text>
+                    <Text style={styles.confirmItemBody} selectable numberOfLines={4}>{it.body}</Text>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+            <View style={styles.confirmActions}>
+              <TouchableOpacity style={styles.confirmDecline} onPress={() => answerConfirm(false)}>
+                <Text style={styles.confirmDeclineText}>Decline</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.confirmAllow, confirmReq?.danger && styles.confirmAllowDanger]}
+                onPress={() => answerConfirm(true)}
+              >
+                <Text style={[styles.confirmAllowText, confirmReq?.danger && styles.confirmAllowDangerText]}>
+                  {confirmReq?.danger ? "Run anyway" : "Allow"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={autoMenu} transparent animationType="fade" onRequestClose={() => setAutoMenu(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAutoMenu(false)}>
           <View style={styles.modeCard}>
@@ -1048,6 +1098,47 @@ const styles = StyleSheet.create({
   autoPillTextOn: { color: theme.bg },
   composerSend: { width: 36, height: 36, borderRadius: 18, backgroundColor: theme.accent, alignItems: "center", justifyContent: "center" },
   composerStop: { width: 36, height: 36, borderRadius: 18, backgroundColor: theme.danger, alignItems: "center", justifyContent: "center" },
+  confirmOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: 22 },
+  confirmCard: {
+    backgroundColor: theme.surface,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: theme.border,
+    padding: 18,
+  },
+  confirmTitle: { color: theme.text, fontSize: 18, fontWeight: "800" },
+  confirmDetail: { color: theme.textDim, fontSize: 13, marginTop: 4, marginBottom: 12, lineHeight: 18 },
+  confirmList: { maxHeight: 280 },
+  confirmItem: { flexDirection: "row", gap: 10, backgroundColor: theme.surfaceAlt, borderRadius: 12, padding: 12 },
+  confirmStep: {
+    color: theme.accent,
+    fontSize: 13,
+    fontWeight: "800",
+    width: 20,
+    height: 20,
+    textAlign: "center",
+    lineHeight: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: theme.accent,
+    overflow: "hidden",
+  },
+  confirmItemLabel: { color: theme.text, fontSize: 15, fontWeight: "700" },
+  confirmItemBody: { color: theme.textDim, fontSize: 13, marginTop: 3, lineHeight: 18 },
+  confirmActions: { flexDirection: "row", gap: 10, marginTop: 16 },
+  confirmDecline: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.border,
+    alignItems: "center",
+  },
+  confirmDeclineText: { color: theme.textDim, fontSize: 15, fontWeight: "700" },
+  confirmAllow: { flex: 1, paddingVertical: 13, borderRadius: 12, backgroundColor: theme.accent, alignItems: "center" },
+  confirmAllowText: { color: theme.bg, fontSize: 15, fontWeight: "800" },
+  confirmAllowDanger: { backgroundColor: theme.danger },
+  confirmAllowDangerText: { color: "#fff" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end", padding: 16 },
   modeCard: { backgroundColor: theme.surface, borderRadius: 16, borderWidth: 1, borderColor: theme.border, padding: 14, marginBottom: 80 },
   modeCardTitle: { color: theme.textDim, fontSize: 13, fontWeight: "700", marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 },

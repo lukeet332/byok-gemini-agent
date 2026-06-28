@@ -1,4 +1,0 @@
-R_DEF: Internal format may change without notice
-local
-string fraude_a11y_desc
-xml fraude_accessibility_config

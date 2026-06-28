@@ -62,8 +62,49 @@ class FraudeAccessibilityService : AccessibilityService() {
 
   fun tapText(text: String): Boolean {
     val root = rootInActiveWindow ?: return false
-    val node = root.findAccessibilityNodeInfosByText(text)?.firstOrNull() ?: return false
-    return clickNode(node)
+    // 1) Fast path: a node whose visible text matches.
+    root.findAccessibilityNodeInfosByText(text)?.firstOrNull()?.let { return clickNode(it) }
+    // 2) Fallback: match by contentDescription too. Most icon buttons (WhatsApp's
+    //    "Send" FAB, Messages' "Send SMS") expose their label ONLY as a
+    //    contentDescription — often on a non-clickable child whose clickable parent
+    //    carries just a resource-id — so findByText misses them entirely.
+    val match = findByTextOrDesc(root, text.trim().lowercase()) ?: return false
+    return clickNode(match)
+  }
+
+  // Best node whose visible text or contentDescription matches (case-insensitive),
+  // preferring exact matches and ones that are (or sit under) a clickable element.
+  private fun findByTextOrDesc(root: AccessibilityNodeInfo, q: String): AccessibilityNodeInfo? {
+    if (q.isEmpty()) return null
+    var best: AccessibilityNodeInfo? = null
+    var bestScore = 0
+    fun visit(n: AccessibilityNodeInfo?) {
+      if (n == null) return
+      val t = n.text?.toString()?.trim()?.lowercase()
+      val d = n.contentDescription?.toString()?.trim()?.lowercase()
+      var score = when {
+        t == q || d == q -> 4
+        d != null && d.contains(q) -> 3
+        t != null && t.contains(q) -> 2
+        else -> 0
+      }
+      if (score > 0) {
+        if (n.isClickable || hasClickableAncestor(n)) score += 1
+        if (score > bestScore) { bestScore = score; best = n }
+      }
+      for (i in 0 until n.childCount) visit(n.getChild(i))
+    }
+    visit(root)
+    return best
+  }
+
+  private fun hasClickableAncestor(node: AccessibilityNodeInfo): Boolean {
+    var n: AccessibilityNodeInfo? = node.parent
+    while (n != null) {
+      if (n.isClickable) return true
+      n = n.parent
+    }
+    return false
   }
 
   fun tapId(id: String): Boolean {
