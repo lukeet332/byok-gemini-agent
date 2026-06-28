@@ -32,6 +32,7 @@ import {
 } from "../storage/SecureStorage";
 import { appendError } from "../storage/ErrorLogStore";
 import { getUserNotes, saveUserNotes } from "../storage/UserNotes";
+import * as Memory from "../storage/MemoryStore";
 import { BrowserEngine } from "../browser/BrowserEngine";
 import * as Device from "../device/DeviceTools";
 import * as Files from "../device/FileTools";
@@ -327,6 +328,46 @@ export const TOOLS: Tool[] = [
           type: "object",
           properties: { notes: { type: "string", description: "The full updated notes (markdown)." } },
           required: ["notes"],
+        },
+      },
+      {
+        name: "memory_save",
+        description:
+          "Save a durable fact / item / list-entry / task to your long-term memory so you can recall it in ANY " +
+          "future chat (e.g. 'car reg is AB12 CDE', 'reading list += Dune', 'Acme deadline Fri 5pm', 'wife's " +
+          "birthday 3 Mar'). For discrete facts/items — tone & style preferences go in update_user_notes instead.",
+        parameters: {
+          type: "object",
+          properties: {
+            text: { type: "string", description: "The thing to remember." },
+            tags: { type: "array", description: "Optional keywords to find it later.", items: { type: "string" } },
+          },
+          required: ["text"],
+        },
+      },
+      {
+        name: "memory_search",
+        description:
+          "Search your long-term memory for saved facts/items (keyword match). Use whenever the user refers to " +
+          "something you may have stored, or to pull context from past chats.",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string", description: "Keywords to search for." } },
+          required: ["query"],
+        },
+      },
+      {
+        name: "memory_list",
+        description: "List everything in your long-term memory (most recent first).",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        name: "memory_delete",
+        description: "Delete a memory entry by its id (ids come from memory_search / memory_list).",
+        parameters: {
+          type: "object",
+          properties: { id: { type: "string", description: "The memory entry id to remove." } },
+          required: ["id"],
         },
       },
       {
@@ -802,6 +843,23 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     const ok = await Shell.a11yGlobal(String(args.action ?? ""));
     return ok ? { ok: true } : { ok: false, error: "action must be back, home, recents, or notifications." };
   },
+  memory_save: async (args) => {
+    const tags = Array.isArray(args.tags) ? (args.tags as unknown[]).map(String) : [];
+    const e = await Memory.addMemory(String(args.text ?? ""), tags, Date.now());
+    return { ok: true, id: e.id };
+  },
+  memory_search: async (args) => {
+    const r = await Memory.searchMemory(String(args.query ?? ""));
+    return { ok: true, count: r.length, results: r.map((e) => ({ id: e.id, text: e.text, tags: e.tags })) };
+  },
+  memory_list: async () => {
+    const r = await Memory.listMemory();
+    return { ok: true, count: r.length, results: r.map((e) => ({ id: e.id, text: e.text, tags: e.tags })) };
+  },
+  memory_delete: async (args) => {
+    const ok = await Memory.deleteMemory(String(args.id ?? ""));
+    return ok ? { ok: true } : { ok: false, error: "No such memory id." };
+  },
   save_secret: async (args) => {
     const name = normalizeSecretName(String(args.name ?? ""));
     const value = String(args.value ?? "");
@@ -1052,7 +1110,13 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
     ? `\n\nWhat you know about this user (their notes/preferences — honour them; update via update_user_notes when you learn something durable):\n${notes}`
     : `\n\nYou have no saved notes about this user yet. When you learn a durable preference, save it with update_user_notes.`;
 
-  return { role: "user", parts: [{ text: base + secretsLine + shellLine + a11yLine + mcpLine + notesBlock + memoBlock }] };
+  const memCount = await Memory.memoryCount().catch(() => 0);
+  const memoryBlock = `\n\nLong-term memory: ${memCount} saved item(s). Use memory_save to remember discrete facts/items/lists/tasks for future chats, and memory_search to recall them when the user refers to something you might have stored. (This is for facts/items; tone/style preferences go in update_user_notes.)`;
+
+  return {
+    role: "user",
+    parts: [{ text: base + secretsLine + shellLine + a11yLine + mcpLine + notesBlock + memoryBlock + memoBlock }],
+  };
 }
 
 // Single attempt — NO auto-retry. Retrying burns more of the same quota; the UI
@@ -1587,6 +1651,10 @@ function statusFor(call: FunctionCall): string {
   if (call.name === "write_file" || call.name === "create_file") return "Writing file...";
   if (call.name === "update_user_notes") return "Updating your notes...";
   if (call.name === "save_secret") return "Saving credential securely...";
+  if (call.name === "memory_save") return "Saving to memory...";
+  if (call.name === "memory_search") return "Recalling from memory...";
+  if (call.name === "memory_list") return "Reading memory...";
+  if (call.name === "memory_delete") return "Forgetting...";
   if (call.name === "update_setting") return `Updating setting: ${String(call.args?.key ?? "")}`;
   if (call.name === "run_shell") return `Running command: ${String(call.args?.command ?? "")}`;
   if (call.name === "run_termux") return `Running in Termux: ${String(call.args?.command ?? "")}`;
