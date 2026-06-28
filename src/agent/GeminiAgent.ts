@@ -1119,7 +1119,7 @@ interface GeminiResponse {
   promptFeedback?: { blockReason?: string };
 }
 
-async function buildSystemInstruction(memo?: string): Promise<Content> {
+async function buildSystemInstruction(memo?: string, requestTitle = false): Promise<Content> {
   const custom = await getSystemPrompt();
   const base = custom.trim() || DEFAULT_SYSTEM_PROMPT;
 
@@ -1203,9 +1203,20 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
 
   const timeBlock = `\n\nCurrent local time: ${new Date().toString()}. Use this for any date/time reasoning. To set reminders/alarms/nudges, use schedule_reminder (compute the ISO 'at' from this time, or pass inMinutes).`;
 
+  // First message of a new chat: have the model name the thread inline (no extra
+  // request) — the app strips this line before showing the reply.
+  const titleBlock = requestTitle
+    ? "\n\nTHREAD TITLE: This is the first message of a new chat. Begin your reply with a single line exactly in the form `TITLE: <a 3-5 word title for this chat>` then a newline, then your normal answer. The app strips that line from what the user sees."
+    : "";
+
   return {
     role: "user",
-    parts: [{ text: base + timeBlock + secretsLine + shellLine + a11yLine + notifLine + mcpLine + notesBlock + memoryBlock + memoBlock }],
+    parts: [
+      {
+        text:
+          base + timeBlock + titleBlock + secretsLine + shellLine + a11yLine + notifLine + mcpLine + notesBlock + memoryBlock + memoBlock,
+      },
+    ],
   };
 }
 
@@ -1734,6 +1745,24 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export interface AgentResult {
   contents: Content[];
   reply: string;
+  title?: string; // AI-suggested thread title (only when requested, first turn)
+}
+
+// On the first message, the model prepends "TITLE: <name>" to its reply (batched
+// into the same turn — no extra request). Split it out for the thread title and
+// strip it from the shown reply.
+function splitTitle(reply: string): { title?: string; reply: string } {
+  const m = reply.match(/^\s*TITLE:\s*(.+?)\s*(?:\r?\n|$)/i);
+  if (!m) return { reply };
+  const title = m[1].replace(/^["']|["']$/g, "").slice(0, 48).trim();
+  return { title, reply: reply.slice(m[0].length).replace(/^\s+/, "") };
+}
+
+// Strip a (possibly partial) leading TITLE: line for live display while streaming.
+export function stripLeadingTitle(text: string): string {
+  if (!/^\s*TITLE:/i.test(text)) return text;
+  const nl = text.indexOf("\n");
+  return nl === -1 ? "" : text.slice(nl + 1).replace(/^\s+/, "");
 }
 // Context for attributing error-log entries to the originating chat.
 export interface AgentContext {
@@ -1821,7 +1850,8 @@ export async function runAgentTurn(
   contents: Content[],
   callbacks: AgentCallbacks = {},
   memo?: string,
-  ctx?: AgentContext
+  ctx?: AgentContext,
+  requestTitle = false
 ): Promise<AgentResult> {
   const history: Content[] = [...contents];
   const setStatus = callbacks.onStatus ?? (() => {});
@@ -1843,7 +1873,7 @@ export async function runAgentTurn(
   } catch {
     activeTools = [{ functionDeclarations: builtins }];
   }
-  const systemInstruction = await buildSystemInstruction(memo);
+  const systemInstruction = await buildSystemInstruction(memo, requestTitle);
   const secrets = await collectSecretValues();
   const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
@@ -1876,7 +1906,9 @@ export async function runAgentTurn(
     const calls = functionCallsIn(turn);
     if (calls.length === 0) {
       setStatus(null);
-      return { contents: history, reply: textIn(turn) || "(no response)" };
+      const out = textIn(turn) || "(no response)";
+      const { title, reply } = requestTitle ? splitTitle(out) : { title: undefined, reply: out };
+      return { contents: history, reply, title };
     }
 
     const responseParts: Part[] = [];
@@ -1991,7 +2023,9 @@ export async function runAgentTurn(
   ];
   const summary = await callModel(nudge, systemInstruction, signal, undefined, false);
   setStatus(null);
-  return { contents: history, reply: textIn(summary) || "(stopped after reaching the tool limit)" };
+  const out = textIn(summary) || "(stopped after reaching the tool limit)";
+  const { title, reply } = requestTitle ? splitTitle(out) : { title: undefined, reply: out };
+  return { contents: history, reply, title };
 }
 
 // Render structured turns into compact text for the summariser to read.

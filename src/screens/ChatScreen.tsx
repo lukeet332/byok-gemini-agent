@@ -31,7 +31,7 @@ import {
   useSpeechRecognitionEvent,
 } from "expo-speech-recognition";
 
-import { AbortedError, compactConversation, runAgentTurn } from "../agent/GeminiAgent";
+import { AbortedError, compactConversation, runAgentTurn, stripLeadingTitle } from "../agent/GeminiAgent";
 import { notifyTurnDone } from "../agent/Background";
 import { getBackgroundRun, getConfirmSystemActions } from "../storage/SecureStorage";
 import McpServersModal from "./McpServersModal";
@@ -528,6 +528,7 @@ export default function ChatScreen({
     runningRef.current = true;
     setBusy(true);
     setNeedsResume(false);
+    const requestTitle = !!titleFrom; // first message → ask the model to title it inline
     const controller = new AbortController();
     abortRef.current = controller;
     bgAbortRef.current = false;
@@ -540,14 +541,16 @@ export default function ChatScreen({
             if (s === "Thinking...") resetStream();
           },
           onToken: (full) => {
-            targetRef.current = full;
+            // Hide the inline "TITLE:" line from the streamed reply.
+            targetRef.current = requestTitle ? stripLeadingTitle(full) : full;
             ensureTicker();
           },
           signal: controller.signal,
           confirmWrite,
         },
         thread.memo,
-        { threadId: thread.id, threadTitle: thread.title }
+        { threadId: thread.id, threadTitle: thread.title },
+        requestTitle
       );
 
       let updated: Thread = { ...thread, contents: result.contents, updatedAt: Date.now() };
@@ -559,7 +562,10 @@ export default function ChatScreen({
           updated = { ...updated, memo, contents: updated.contents.slice(split) };
         }
       }
-      if (titleFrom) updated.title = deriveTitle(titleFrom);
+      // Title the thread from the AI's first reply — batched into this same turn
+      // (the model prepends a TITLE line; no separate request). Fall back to a
+      // local title if it didn't.
+      if (titleFrom) updated.title = result.title?.trim() || deriveTitle(titleFrom);
 
       liveContentsRef.current = updated.contents;
       setThread(updated);
