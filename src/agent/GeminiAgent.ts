@@ -676,7 +676,7 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
   run_shell: async (args) => {
     const mode = await getExecMode();
     if (mode === "off")
-      return { ok: false, error: "Execution is off. The user can pick an Execution mode in Settings → Advanced mode." };
+      return { ok: false, error: "Execution is off. The user can pick an Execution mode in Settings → Developer settings." };
     const command = String(args.command ?? "");
     if (!command.trim()) return { ok: false, error: "Missing command." };
     try {
@@ -698,7 +698,7 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
   },
   run_termux: async (args, signal) => {
     if ((await getExecMode()) === "off")
-      return { ok: false, error: "Execution is off. The user can pick an Execution mode in Settings → Advanced mode." };
+      return { ok: false, error: "Execution is off. The user can pick an Execution mode in Settings → Developer settings." };
     const command = String(args.command ?? "");
     if (!command.trim()) return { ok: false, error: "Missing command." };
     const fired = await Shell.runTermux(sessionWrap(command));
@@ -717,7 +717,7 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
         timedOut: true,
         note: canRead
           ? "Still running — call read_log to check progress/output."
-          : "Couldn't read Termux output. For no-root coding, enable All files access in Settings → Advanced mode (or use Shizuku/root).",
+          : "Couldn't read Termux output. For no-root coding, enable All files access in Settings → Developer settings (or use Shizuku/root).",
       };
     }
     const { view, total, nextOffset } = pageLog(content);
@@ -738,7 +738,7 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
   },
   apply_patch: async (args, signal) => {
     if ((await getExecMode()) === "off")
-      return { ok: false, error: "Execution is off. The user can pick an Execution mode in Settings → Advanced mode." };
+      return { ok: false, error: "Execution is off. The user can pick an Execution mode in Settings → Developer settings." };
     const diff = String(args.diff ?? "");
     if (!diff.trim()) return { ok: false, error: "Missing diff (provide a unified git diff)." };
     const eof = "FRAUDE_PATCH_EOF";
@@ -761,7 +761,7 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
     };
   },
   ui_screen: async () => {
-    if (!Shell.a11yEnabled()) return { ok: false, error: "Accessibility automation is off. The user can enable it in Settings → Advanced mode." };
+    if (!Shell.a11yEnabled()) return { ok: false, error: "Accessibility automation is off. The user can enable it in Settings → Developer settings." };
     return { ok: true, screen: await Shell.a11yDump() };
   },
   ui_tap: async (args) => {
@@ -975,13 +975,13 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
   const shizukuState = shizuku.granted
     ? "connected & granted"
     : shizuku.running
-      ? "running but NOT granted (tell the user to grant it in Settings → Advanced mode)"
-      : "NOT running (tell the user to install/start the Shizuku app, then grant it in Settings → Advanced mode)";
+      ? "running but NOT granted (tell the user to grant it in Settings → Developer settings)"
+      : "NOT running (tell the user to install/start the Shizuku app, then grant it in Settings → Developer settings)";
 
   let shellLine = "";
   if (execMode === "off") {
     shellLine =
-      "\n\nExecution mode is OFF — you have no on-device shell/Termux tools. If the user asks you to run, build or test code, or operate the device, do NOT just refuse: tell them to pick an Execution mode in Settings → Advanced mode (Termux for coding without root, Shizuku for device control, Root if rooted), then retry.";
+      "\n\nExecution mode is OFF — you have no on-device shell/Termux tools. If the user asks you to run, build or test code, or operate the device, do NOT just refuse: tell them to pick an Execution mode in Settings → Developer settings (Termux for coding without root, Shizuku for device control, Root if rooted), then retry.";
   } else {
     let avail = `\n\nExecution mode: ${execMode.toUpperCase()}. `;
     if (execMode === "app")
@@ -998,7 +998,7 @@ async function buildSystemInstruction(memo?: string): Promise<Content> {
       avail +=
         " CODING: use run_termux for compilers — it's a PERSISTENT session (cd + env, incl. activated venvs, carry over between calls). Output is captured in FULL (shows start+end; call read_log(offset) for more). Prefer apply_patch(diff) (surgical git apply) over rewriting whole files. Loop like a CLI agent: cd repo → apply_patch/edit → run_termux test → read output → fix → repeat. Use real git in Termux (branch/diff/commit/push).";
       if (execMode === "termux")
-        avail += " NOTE: in this no-root mode, reading Termux output needs All files access — if output can't be read, tell the user to grant it in Settings → Advanced mode.";
+        avail += " NOTE: in this no-root mode, reading Termux output needs All files access — if output can't be read, tell the user to grant it in Settings → Developer settings.";
     }
     if (execMode === "shizuku" || execMode === "root") {
       avail +=

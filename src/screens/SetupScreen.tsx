@@ -2,7 +2,7 @@
 // configured. The app is AI-agnostic: pick Gemini (default), Claude, or any
 // OpenAI-compatible backend. Keys are saved to the secure keystore only.
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -17,15 +17,38 @@ import {
 } from "react-native";
 
 import { OPENAI_PRESETS } from "../agent/GeminiAgent";
-import { a11yEnabled, openA11ySettings, openAppInfo } from "../../modules/shell-exec";
+import {
+  a11yEnabled,
+  hasAllFilesAccess,
+  linuxTerminalStatus,
+  LinuxTerminalStatus,
+  openA11ySettings,
+  openAppInfo,
+  openLinuxTerminal,
+  requestAllFilesAccess,
+  requestShizukuPermission,
+  shizukuStatus,
+  ShizukuStatus,
+} from "../../modules/shell-exec";
 import {
   AiProvider,
+  ExecMode,
+  getExecMode,
   saveAnthropicConfig,
+  saveExecMode,
   saveGeminiKey,
   saveOpenAiConfig,
   saveProvider,
 } from "../storage/SecureStorage";
 import { theme } from "../theme";
+
+const EXEC_MODES: { id: ExecMode; label: string; desc: string }[] = [
+  { id: "off", label: "Off", desc: "No on-device execution (edit via GitHub)." },
+  { id: "app", label: "App sandbox", desc: "Basic built-in tools only; no compilers." },
+  { id: "termux", label: "Termux", desc: "Real toolchains (python/node/clang/git). No root." },
+  { id: "shizuku", label: "Shizuku", desc: "ADB-level: device control + commands + Termux." },
+  { id: "root", label: "Root", desc: "Full root + Termux (rooted devices)." },
+];
 
 const PROVIDERS: { id: AiProvider; label: string }[] = [
   { id: "gemini", label: "Gemini" },
@@ -42,6 +65,29 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
   const [openaiModel, setOpenaiModel] = useState("");
   const [saving, setSaving] = useState(false);
   const [autoOn, setAutoOn] = useState(a11yEnabled());
+  // Optional developer setup.
+  const [devOpen, setDevOpen] = useState(false);
+  const [execMode, setExecMode] = useState<ExecMode>("off");
+  const [shz, setShz] = useState<ShizukuStatus>({ running: false, granted: false });
+  const [allFiles, setAllFiles] = useState(false);
+  const [linux, setLinux] = useState<LinuxTerminalStatus>({ supported: false, available: false, sdk: 0 });
+
+  useEffect(() => {
+    getExecMode().then(setExecMode);
+    shizukuStatus().then(setShz);
+    setAllFiles(hasAllFilesAccess());
+    setLinux(linuxTerminalStatus());
+  }, []);
+
+  function pickExecMode(m: ExecMode) {
+    setExecMode(m);
+    void saveExecMode(m); // persist immediately so it sticks
+  }
+  function refreshDev() {
+    shizukuStatus().then(setShz);
+    setAllFiles(hasAllFilesAccess());
+    setLinux(linuxTerminalStatus());
+  }
 
   const canContinue =
     !saving &&
@@ -192,6 +238,70 @@ export default function SetupScreen({ onDone }: { onDone: () => void }) {
           <Text style={styles.autoStatus}>{autoOn ? "enabled ✓" : "off"}</Text>
         </View>
 
+        <TouchableOpacity style={styles.accordionHead} onPress={() => setDevOpen((o) => !o)}>
+          <Text style={styles.label}>Developer settings (optional)</Text>
+          <Text style={styles.accordionChevron}>{devOpen ? "▾" : "▸"}</Text>
+        </TouchableOpacity>
+        {devOpen ? (
+          <View style={styles.block}>
+            <Text style={styles.hint}>
+              Set up on-device execution so the AI can run, build & test code (and automate the device). All
+              optional — you can change everything later in Settings → Developer settings.
+            </Text>
+
+            <Text style={styles.smallLabel}>Execution mode</Text>
+            {EXEC_MODES.map((m) => (
+              <TouchableOpacity key={m.id} style={styles.devRow} onPress={() => pickExecMode(m.id)}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.devName}>{m.label}</Text>
+                  <Text style={styles.devDesc}>{m.desc}</Text>
+                </View>
+                {execMode === m.id ? <Text style={styles.devCheck}>✓</Text> : null}
+              </TouchableOpacity>
+            ))}
+
+            <Text style={styles.smallLabel}>Shizuku (ADB powers, no root)</Text>
+            <Text style={styles.hint}>Status: {shz.granted ? "connected ✓" : shz.running ? "running — needs permission" : "not running"}.</Text>
+            <View style={styles.autoRow}>
+              <TouchableOpacity onPress={() => Linking.openURL("https://shizuku.rikka.app/guide/setup/")}>
+                <Text style={styles.link}>Set up Shizuku →</Text>
+              </TouchableOpacity>
+              {shz.running && !shz.granted ? (
+                <TouchableOpacity style={styles.autoBtn} onPress={() => requestShizukuPermission().then(refreshDev)}>
+                  <Text style={styles.autoBtnText}>Grant</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            <Text style={styles.smallLabel}>Termux (toolchains)</Text>
+            <Text style={styles.hint}>Install Termux for real compilers; grant All files access so Fraude can read its build output without root. Status: {allFiles ? "all-files ✓" : "all-files off"}.</Text>
+            <View style={styles.autoRow}>
+              <TouchableOpacity onPress={() => Linking.openURL("https://f-droid.org/packages/com.termux/")}>
+                <Text style={styles.link}>Get Termux →</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.autoBtn} onPress={() => requestAllFilesAccess()}>
+                <Text style={styles.autoBtnText}>All files access</Text>
+              </TouchableOpacity>
+            </View>
+
+            {linux.supported ? (
+              <>
+                <Text style={styles.smallLabel}>Native Linux terminal (Android 16+)</Text>
+                <Text style={styles.hint}>A full Debian VM for heavy manual coding. {linux.available ? "Available." : "Enable in Developer options."}</Text>
+                <View style={styles.autoRow}>
+                  <TouchableOpacity style={styles.autoBtn} onPress={() => openLinuxTerminal()}>
+                    <Text style={styles.autoBtnText}>{linux.available ? "Open" : "Enable"}</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : null}
+
+            <TouchableOpacity style={[styles.autoBtn, { alignSelf: "flex-start", marginTop: 12 }]} onPress={refreshDev}>
+              <Text style={styles.autoBtnText}>Refresh status</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         <Text style={styles.note}>Web search & page reading work out of the box — no extra keys needed.</Text>
 
         <TouchableOpacity
@@ -258,6 +368,13 @@ const styles = StyleSheet.create({
   },
   autoBtnText: { color: theme.accent, fontWeight: "700", fontSize: 13 },
   autoStatus: { color: theme.textDim, fontSize: 13 },
+  accordionHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 22 },
+  accordionChevron: { color: theme.textDim, fontSize: 16 },
+  smallLabel: { color: theme.text, fontSize: 14, fontWeight: "700", marginTop: 16, marginBottom: 4 },
+  devRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10 },
+  devName: { color: theme.text, fontSize: 15, fontWeight: "700" },
+  devDesc: { color: theme.textDim, fontSize: 13, marginTop: 2 },
+  devCheck: { color: theme.accent, fontSize: 18, fontWeight: "700", marginLeft: 10 },
   note: { color: theme.textDim, fontSize: 13, marginTop: 22, lineHeight: 19 },
   continueBtn: { backgroundColor: theme.accent, borderRadius: 12, paddingVertical: 16, alignItems: "center", marginTop: 34 },
   disabled: { opacity: 0.4 },

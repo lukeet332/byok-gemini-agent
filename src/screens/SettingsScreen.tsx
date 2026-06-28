@@ -709,7 +709,7 @@ export default function SettingsScreen() {
         {status ? <Text style={styles.saved}>{status}</Text> : null}
 
         <TouchableOpacity style={styles.accordionHead} onPress={() => setAdvancedOpen((o) => !o)}>
-          <Text style={styles.sectionLabel}>Advanced mode</Text>
+          <Text style={styles.sectionLabel}>Developer settings</Text>
           <Text style={styles.accordionChevron}>{advancedOpen ? "▾" : "▸"}</Text>
         </TouchableOpacity>
         {advancedOpen ? (

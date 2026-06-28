@@ -173,7 +173,7 @@ class ShellExecModule : Module() {
 
     // Read the current screen (node tree) so the AI can decide what to act on.
     AsyncFunction("a11yDump") {
-      FraudeAccessibilityService.instance?.dump() ?: "Accessibility service not enabled. Turn it on in Settings → Advanced mode."
+      FraudeAccessibilityService.instance?.dump() ?: "Accessibility service not enabled. Turn it on in Settings → Developer settings."
     }
 
     AsyncFunction("a11yTapText") { text: String -> FraudeAccessibilityService.instance?.tapText(text) ?: false }
