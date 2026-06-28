@@ -7,6 +7,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -36,6 +37,7 @@ import {
   normalizeSecretName,
   saveAll,
   saveAnthropicConfig,
+  saveAnthropicModel,
   saveBackgroundRun,
   saveConfirmSystemActions,
   saveExecMode,
@@ -203,12 +205,18 @@ export default function SettingsScreen() {
     })();
   }, []);
 
-  // Auto-save when leaving the screen, so dropdown/provider/toggle changes stick
-  // even if the user doesn't tap Save. Guarded so we never write before load.
+  // Re-read the system-permission statuses when returning to the app (e.g. after
+  // toggling something in system settings) so the buttons reflect reality.
   useEffect(() => {
-    return () => {
-      if (loadedRef.current) void persistSettings(latest.current);
-    };
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s !== "active") return;
+      setA11yOn(a11yEnabled());
+      setNotifOn(notificationsEnabled());
+      setAllFiles(hasAllFilesAccess());
+      setLinux(linuxTerminalStatus());
+      shizukuStatus().then(setShizuku);
+    });
+    return () => sub.remove();
   }, []);
 
   async function refreshShizuku() {
@@ -217,6 +225,40 @@ export default function SettingsScreen() {
   async function grantShizuku() {
     await requestShizukuPermission();
     await refreshShizuku();
+  }
+
+  // Controls persist immediately on change (text fields use the Save button).
+  function pickProvider(p: AiProvider) {
+    setProvider(p);
+    void saveProvider(p);
+  }
+  function pickModel(id: string) {
+    setModel(id);
+    setCustomModel(false);
+    setModelMenu(false);
+    void saveModel(id);
+  }
+  function pickAnthModel(id: string) {
+    setAnthropicModel(id);
+    setCustomAnth(false);
+    setAnthMenu(false);
+    void saveAnthropicModel(id);
+  }
+  function toggleBackground(v: boolean) {
+    setBackgroundRunState(v);
+    void saveBackgroundRun(v);
+  }
+  function pickExecMode(m: ExecMode) {
+    setExecModeState(m);
+    void saveExecMode(m);
+  }
+  function toggleConfirmSystem(v: boolean) {
+    setConfirmSystemState(v);
+    void saveConfirmSystemActions(v);
+  }
+  function pickWriteMode(m: GitWriteMode) {
+    setWriteMode(m);
+    void saveWriteMode(m);
   }
 
   async function onClearLogs() {
@@ -300,7 +342,7 @@ export default function SettingsScreen() {
             <TouchableOpacity
               key={p.id}
               style={[styles.segItem, provider === p.id && styles.segItemOn]}
-              onPress={() => setProvider(p.id)}
+              onPress={() => pickProvider(p.id)}
             >
               <Text style={[styles.segText, provider === p.id && styles.segTextOn]}>{p.label}</Text>
             </TouchableOpacity>
@@ -446,11 +488,7 @@ export default function SettingsScreen() {
                 <TouchableOpacity
                   key={p.id}
                   style={styles.modelRow}
-                  onPress={() => {
-                    setModel(p.id);
-                    setCustomModel(false);
-                    setModelMenu(false);
-                  }}
+                  onPress={() => pickModel(p.id)}
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={styles.modelName}>{p.id}</Text>
@@ -480,11 +518,7 @@ export default function SettingsScreen() {
                 <TouchableOpacity
                   key={p.id}
                   style={styles.modelRow}
-                  onPress={() => {
-                    setAnthropicModel(p.id);
-                    setCustomAnth(false);
-                    setAnthMenu(false);
-                  }}
+                  onPress={() => pickAnthModel(p.id)}
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={styles.modelName}>{p.id}</Text>
@@ -511,15 +545,13 @@ export default function SettingsScreen() {
           <View style={styles.toggleTextWrap}>
             <Text style={styles.toggleName}>Keep working in the background</Text>
             <Text style={styles.hint}>
-              Don't cancel a running task when you leave the app or lock the screen — let it finish, and get a
-              notification when it's done. The OS grants a grace period (longer on Android than iOS); if a long
-              task is suspended, your chat is saved and offers a Continue button when you reopen it.
+              Let a running task finish after you leave the app, and notify you when it's done.
             </Text>
           </View>
           <Switch
             value={backgroundRun}
             onValueChange={(v) => {
-              setBackgroundRunState(v);
+              toggleBackground(v);
               if (v) void requestNotificationPermission();
             }}
             trackColor={{ false: theme.border, true: theme.accent }}
@@ -528,41 +560,28 @@ export default function SettingsScreen() {
         </View>
 
         <Text style={styles.sectionLabel}>Screen automation</Text>
-        <Text style={styles.hint}>
-          Let Fraude operate your phone — read the screen and tap/type to drive any app (e.g. open WhatsApp
-          with a drafted message and press send). App-agnostic; no root needed. Status:{" "}
-          {a11yOn ? "enabled ✓" : "off"}.
-        </Text>
+        <Text style={styles.hint}>Let Fraude tap & type in other apps for you (e.g. send a WhatsApp). No root.</Text>
+        <View style={styles.advButtons}>
+          <TouchableOpacity style={[styles.advBtn, a11yOn && styles.advBtnOn]} onPress={() => openA11ySettings()}>
+            <Text style={[styles.advBtnText, a11yOn && styles.advBtnOnText]}>{a11yOn ? "✓ Enabled" : "Enable"}</Text>
+          </TouchableOpacity>
+          {!a11yOn ? (
+            <TouchableOpacity style={styles.advBtn} onPress={() => openAppInfo()}>
+              <Text style={styles.advBtnText}>Can't toggle? App info</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
         {!a11yOn ? (
-          <Text style={[styles.hint, { marginTop: 6 }]}>
-            ⚠️ If the Accessibility toggle is greyed out or says “Restricted setting” (normal for apps installed
-            outside the Play Store on Android 13+): open App info → ⋮ menu (top-right) → “Allow restricted
-            settings”, then turn Fraude on in Accessibility.
+          <Text style={styles.subhint}>
+            Greyed out? Sideloaded apps need: App info → ⋮ → Allow restricted settings, then enable.
           </Text>
         ) : null}
-        <View style={styles.advButtons}>
-          <TouchableOpacity style={styles.advBtn} onPress={() => openA11ySettings()}>
-            <Text style={styles.advBtnText}>{a11yOn ? "Accessibility settings" : "Enable screen automation"}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.advBtn} onPress={() => openAppInfo()}>
-            <Text style={styles.advBtnText}>App info (allow restricted)</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.advBtn} onPress={() => setA11yOn(a11yEnabled())}>
-            <Text style={styles.advBtnText}>Refresh</Text>
-          </TouchableOpacity>
-        </View>
 
         <Text style={styles.sectionLabel}>Notification access</Text>
-        <Text style={styles.hint}>
-          Let Fraude read incoming notifications so it can triage and summarise what's arrived ("what did I
-          miss?"). Grant it in the system Notification access screen. Status: {notifOn ? "on ✓" : "off"}.
-        </Text>
+        <Text style={styles.hint}>Let Fraude read incoming notifications to triage "what did I miss?".</Text>
         <View style={styles.advButtons}>
-          <TouchableOpacity style={styles.advBtn} onPress={() => openNotificationSettings()}>
-            <Text style={styles.advBtnText}>{notifOn ? "Notification access" : "Enable notification access"}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.advBtn} onPress={() => setNotifOn(notificationsEnabled())}>
-            <Text style={styles.advBtnText}>Refresh</Text>
+          <TouchableOpacity style={[styles.advBtn, notifOn && styles.advBtnOn]} onPress={() => openNotificationSettings()}>
+            <Text style={[styles.advBtnText, notifOn && styles.advBtnOnText]}>{notifOn ? "✓ Enabled" : "Enable"}</Text>
           </TouchableOpacity>
         </View>
 
@@ -593,7 +612,7 @@ export default function SettingsScreen() {
             <TouchableOpacity
               key={m}
               style={[styles.chip, writeMode === m && styles.chipActive]}
-              onPress={() => setWriteMode(m)}
+              onPress={() => pickWriteMode(m)}
             >
               <Text style={[styles.chipText, writeMode === m && styles.chipTextActive]}>{label}</Text>
             </TouchableOpacity>
@@ -721,8 +740,12 @@ export default function SettingsScreen() {
           </>
         ) : null}
 
+        <Text style={styles.subhint}>
+          Toggles & dropdowns above save automatically. Use this to save typed fields — API keys, tokens,
+          model ids, instructions, preferences and secrets.
+        </Text>
         <TouchableOpacity style={[styles.saveBtn, saving && styles.disabled]} onPress={onSave} disabled={saving}>
-          {saving ? <ActivityIndicator color={theme.bg} /> : <Text style={styles.saveText}>Save</Text>}
+          {saving ? <ActivityIndicator color={theme.bg} /> : <Text style={styles.saveText}>Save keys &amp; text</Text>}
         </TouchableOpacity>
         {status ? <Text style={styles.saved}>{status}</Text> : null}
 
@@ -761,7 +784,7 @@ export default function SettingsScreen() {
                 { id: "root", label: "Root", desc: "Full root + Termux (rooted devices)." },
               ] as { id: ExecMode; label: string; desc: string }[]
             ).map((m) => (
-              <TouchableOpacity key={m.id} style={styles.modelRow} onPress={() => setExecModeState(m.id)}>
+              <TouchableOpacity key={m.id} style={styles.modelRow} onPress={() => pickExecMode(m.id)}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.modelName}>{m.label}</Text>
                   <Text style={styles.modelDesc}>{m.desc}</Text>
@@ -773,85 +796,71 @@ export default function SettingsScreen() {
             <View style={styles.toggleRow}>
               <View style={styles.toggleTextWrap}>
                 <Text style={styles.toggleName}>Always confirm system actions</Text>
-                <Text style={styles.hint}>
-                  Make Shizuku & root commands ask for confirmation every time — even when Auto mode is on.
-                  Strongly recommended; these run with elevated privileges.
-                </Text>
+                <Text style={styles.hint}>Shizuku & root commands ask every time, even in Auto mode. Recommended.</Text>
               </View>
               <Switch
                 value={confirmSystem}
-                onValueChange={setConfirmSystemState}
+                onValueChange={toggleConfirmSystem}
                 trackColor={{ false: theme.border, true: theme.accent }}
                 thumbColor={theme.text}
               />
             </View>
 
-            <Text style={styles.smallLabel}>Shizuku — shell access without root</Text>
-            <Text style={styles.hint}>
-              Shizuku grants ADB-level (shell-uid) privileges to apps without rooting — enough to run
-              pm/cmd/settings, automate other apps, and grant Fraude extra permissions. Install it, start it
-              once via Wireless Debugging, then grant access here.{"\n"}Status:{" "}
-              {shizuku.running ? (shizuku.granted ? "connected ✓" : "running — needs permission") : "not running"}.
-            </Text>
-            <Link label="How to set up Shizuku →" url="https://shizuku.rikka.app/guide/setup/" />
+            <Text style={styles.smallLabel}>Shizuku — shell access, no root</Text>
+            <Text style={styles.hint}>ADB-level powers without rooting. Install Shizuku, start it via Wireless Debugging, then grant access.</Text>
             <View style={styles.advButtons}>
-              <TouchableOpacity style={styles.advBtn} onPress={refreshShizuku}>
-                <Text style={styles.advBtnText}>Refresh status</Text>
-              </TouchableOpacity>
-              {shizuku.running && !shizuku.granted ? (
+              {shizuku.granted ? (
+                <View style={[styles.advBtn, styles.advBtnOn]}>
+                  <Text style={styles.advBtnOnText}>✓ Connected</Text>
+                </View>
+              ) : shizuku.running ? (
                 <TouchableOpacity style={styles.advBtn} onPress={grantShizuku}>
-                  <Text style={styles.advBtnText}>Grant Shizuku access</Text>
+                  <Text style={styles.advBtnText}>Grant access</Text>
                 </TouchableOpacity>
-              ) : null}
+              ) : (
+                <TouchableOpacity style={styles.advBtn} onPress={() => Linking.openURL("https://shizuku.rikka.app/guide/setup/")}>
+                  <Text style={styles.advBtnText}>Set up Shizuku</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <Text style={styles.smallLabel}>Local toolchain (Termux)</Text>
+            <Text style={styles.hint}>
+              Install Termux for real compilers (python/node/clang/git). Grant All files access so Fraude can
+              read build output without root.
+            </Text>
+            <Link label="Get Termux (F-Droid) →" url="https://f-droid.org/packages/com.termux/" />
+            <View style={styles.advButtons}>
+              <TouchableOpacity style={[styles.advBtn, allFiles && styles.advBtnOn]} onPress={() => requestAllFilesAccess()}>
+                <Text style={[styles.advBtnText, allFiles && styles.advBtnOnText]}>
+                  {allFiles ? "✓ All files access" : "Grant all files access"}
+                </Text>
+              </TouchableOpacity>
             </View>
 
             <Text style={styles.smallLabel}>Native Linux terminal (Android 16+)</Text>
-            <Text style={styles.hint}>
-              {linux.supported
-                ? linux.available
-                  ? "Your device has the native Linux Terminal — a full Debian VM with apt and real toolchains. The best place for heavy local coding. (To let Fraude run commands inside it, run an SSH server in the VM — bridge coming.)"
-                  : "Your device supports the native Linux Terminal (Android 16+). Enable it in Developer options → Linux development environment, then it's a full Debian VM for coding."
-                : `Not available on this device (Android 16+ only; you're on API ${linux.sdk || "?"}). Use Termux above instead.`}
-            </Text>
             {linux.supported ? (
-              <View style={styles.advButtons}>
-                <TouchableOpacity style={styles.advBtn} onPress={() => openLinuxTerminal()}>
-                  <Text style={styles.advBtnText}>{linux.available ? "Open Linux Terminal" : "Enable in Developer options"}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.advBtn} onPress={() => setLinux(linuxTerminalStatus())}>
-                  <Text style={styles.advBtnText}>Refresh</Text>
-                </TouchableOpacity>
-              </View>
-            ) : null}
+              <>
+                <Text style={styles.hint}>
+                  {linux.available
+                    ? "Full Debian VM for heavy manual coding. Fraude can't drive it yet — use Termux for automated runs."
+                    : "Supported here — enable it in Developer options → Linux development environment."}
+                </Text>
+                <View style={styles.advButtons}>
+                  <TouchableOpacity style={styles.advBtn} onPress={() => openLinuxTerminal()}>
+                    <Text style={styles.advBtnText}>{linux.available ? "Open" : "Enable"}</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <Text style={styles.hint}>Android 16+ only (you're on API {linux.sdk || "?"}). Use Termux instead.</Text>
+            )}
 
             <Text style={styles.smallLabel}>Root</Text>
             <Text style={styles.hint}>
-              If your device is rooted, the AI can run commands as root (su) — confirmed each time, no extra
-              setup beyond a working su. Root also allows installing Fraude as a privileged system app (very
-              advanced, device-specific) — ask the assistant to walk you through it.
+              On rooted devices the AI can run as root (su), confirmed each time — and can install Fraude as a
+              system app (advanced; ask the assistant).
             </Text>
-
-            <Text style={styles.smallLabel}>Local programming tools (Termux)</Text>
-            <Text style={styles.hint}>
-              Android ships toybox (ls, grep, cat, ps…) but no compilers. Install Termux + the Termux:API
-              add-on for a full local toolchain (python, node, clang, git…). Once both are installed and shell
-              execution is on, ask Fraude to set up or run your project and it drives the steps via run_shell /
-              Termux.
-            </Text>
-            <Link label="Get Termux (F-Droid) →" url="https://f-droid.org/packages/com.termux/" />
-            <Link label="Get Termux:API (F-Droid) →" url="https://f-droid.org/packages/com.termux.api/" />
-            <Text style={[styles.hint, { marginTop: 10 }]}>
-              To read Termux build output WITHOUT root or Shizuku, grant All files access — Fraude then reads
-              the output it captures to shared storage.{"\n"}Status: {allFiles ? "granted ✓" : "not granted"}.
-            </Text>
-            <View style={styles.advButtons}>
-              <TouchableOpacity style={styles.advBtn} onPress={() => requestAllFilesAccess()}>
-                <Text style={styles.advBtnText}>Grant All files access</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.advBtn} onPress={() => setAllFiles(hasAllFilesAccess())}>
-                <Text style={styles.advBtnText}>Refresh</Text>
-              </TouchableOpacity>
-            </View>
           </>
         ) : null}
 
@@ -968,6 +977,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.surface,
   },
   advBtnText: { color: theme.accent, fontWeight: "700", fontSize: 13 },
+  advBtnOn: { backgroundColor: theme.accent, borderColor: theme.accent },
+  advBtnOnText: { color: theme.bg, fontWeight: "700", fontSize: 13 },
+  subhint: { color: theme.textDim, fontSize: 12, marginTop: 6, lineHeight: 17 },
   segItem: { flex: 1, paddingVertical: 10, borderRadius: 9, alignItems: "center" },
   segItemOn: { backgroundColor: theme.accent },
   segText: { color: theme.textDim, fontSize: 14, fontWeight: "700" },

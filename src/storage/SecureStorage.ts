@@ -176,6 +176,14 @@ export async function getAnthropicConfig(): Promise<AnthropicConfig> {
   };
 }
 
+// Granular: persist just the Claude model (so the model dropdown can save on
+// change without touching the separately-edited API key text field).
+export async function saveAnthropicModel(model: string): Promise<void> {
+  const t = model.trim();
+  if (t) await SecureStore.setItemAsync(ANTHROPIC_MODEL_KEY, t);
+  else await SecureStore.deleteItemAsync(ANTHROPIC_MODEL_KEY);
+}
+
 export async function saveAnthropicConfig(c: AnthropicConfig): Promise<void> {
   const set = async (k: string, v: string) => {
     const t = v.trim();
