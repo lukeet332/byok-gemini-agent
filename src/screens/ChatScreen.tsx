@@ -857,7 +857,7 @@ export default function ChatScreen({
     const isUser = item.role === "user";
     if (isUser) {
       return (
-        <View style={[styles.bubble, styles.userBubble, styles.alignRight]}>
+        <View style={styles.userMsg}>
           {item.imageUri ? (
             <TouchableOpacity activeOpacity={0.85} onPress={() => setFullImage(item.imageUri!)}>
               <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" />
@@ -882,7 +882,7 @@ export default function ChatScreen({
     }
     const isLast = item.id === messages[messages.length - 1]?.id;
     return (
-      <View style={[styles.bubble, styles.modelBubble]}>
+      <View style={styles.modelMsg}>
         {item.imageUri ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() => setFullImage(item.imageUri!)}>
             <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" />
@@ -891,7 +891,7 @@ export default function ChatScreen({
         <Markdown style={mdStyles} rules={mdRules}>
           {withInlineImages(item.text)}
         </Markdown>
-        <View style={styles.bubbleActions}>
+        <View style={styles.modelActions}>
           <TouchableOpacity onPress={() => copyMessage(item)} hitSlop={10}>
             <Ionicons
               name={copiedId === item.id ? "checkmark" : "copy-outline"}
@@ -940,7 +940,7 @@ export default function ChatScreen({
         onContentSizeChange={scrollToEnd}
         ListFooterComponent={
           displayed !== "" ? (
-            <View style={[styles.bubble, styles.modelBubble]}>
+            <View style={styles.modelMsg}>
               <Text style={styles.modelText} selectable>{displayed}</Text>
             </View>
           ) : null
@@ -955,13 +955,14 @@ export default function ChatScreen({
         }
       />
 
-      {/* Fade chat content into the background as it nears the floating composer,
-          then stay solid bg BEHIND and BELOW the composer so nothing bleeds out in
-          the gaps. Top ~56px fades; the rest (composer area + below) is opaque. */}
+      {/* Solid bg BEHIND/BELOW the composer (so content doesn't bleed into the
+          gaps), with only a thin fade right at its top edge — kept short so it
+          doesn't dim readable content above the composer (esp. with the keyboard
+          up). */}
       <LinearGradient
         colors={["transparent", theme.bg, theme.bg]}
-        locations={[0, Math.min(0.7, 56 / (bottomBarH + 56)), 1]}
-        style={[styles.bottomFade, { height: bottomBarH + 56 }]}
+        locations={[0, Math.min(0.5, 24 / (bottomBarH + 24)), 1]}
+        style={[styles.bottomFade, { height: bottomBarH + 24 }]}
         pointerEvents="none"
       />
 
@@ -1339,6 +1340,18 @@ const styles = StyleSheet.create({
   },
   userText: { color: theme.userBubbleText, fontSize: 15, lineHeight: 21 },
   modelText: { color: theme.text, fontSize: 15, lineHeight: 21 },
+  // Claude-style layout: the user message is a full-width contained block; the AI
+  // reply is plain full-width text (no bubble) for max readability.
+  userMsg: {
+    backgroundColor: theme.userBubble,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginTop: 14,
+    marginBottom: 4,
+  },
+  modelMsg: { paddingHorizontal: 4, paddingTop: 2, paddingBottom: 8 },
+  modelActions: { flexDirection: "row", gap: 18, marginTop: 8, alignItems: "center" },
   attachImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 6 },
   bubbleActions: { flexDirection: "row", gap: 16, alignSelf: "flex-end", marginTop: 6, alignItems: "center" },
   userCopy: { alignSelf: "flex-end", marginTop: 6, opacity: 0.8 },
