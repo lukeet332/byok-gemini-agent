@@ -183,44 +183,58 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-// Activity timeline for a turn, rendered like a pinned vertical thread: a
-// continuous line with a dot at each step, thinking and tool actions
-// interspersed. Always shown (when the setting is on) — no accordion.
-function ActivityTimeline({
+// A turn rendered as one pinned vertical thread: every step is a row with a dot
+// on a continuous line, and the final answer (children) is the last pin. The
+// in-progress step shows a spinner at its pin until it resolves. Each row draws
+// the connector down to the next, except the last.
+function ModelThread({
   steps,
-  live,
   pendingLabel,
+  children,
 }: {
   steps: ActivityStep[];
-  live?: boolean;
   pendingLabel?: string;
+  children?: React.ReactNode;
 }) {
-  if (!steps.length && !pendingLabel) return null;
+  type Row = { kind: "step"; s: ActivityStep } | { kind: "pending" } | { kind: "answer" };
+  const rows: Row[] = [
+    ...steps.map((s) => ({ kind: "step", s }) as Row),
+    ...(pendingLabel && children == null ? [{ kind: "pending" } as Row] : []),
+    ...(children != null ? [{ kind: "answer" } as Row] : []),
+  ];
+  if (!rows.length) return null;
   return (
-    <View style={styles.timeline}>
-      {/* the connecting line, behind the dots */}
-      <View style={styles.timelineLine} />
-      {steps.map((s, i) => {
-        const thinking = /^Thought/.test(s.label);
+    <View>
+      {rows.map((r, i) => {
+        const last = i === rows.length - 1;
+        const thinking = r.kind === "step" && /^Thought/.test(r.s.label);
         return (
-          <View key={i} style={styles.timelineRow}>
-            <View style={[styles.timelineDot, thinking ? styles.timelineDotThink : styles.timelineDotAct]} />
-            <Text style={[styles.timelineLabel, thinking && styles.timelineLabelDim]} numberOfLines={2}>
-              {s.label}
-            </Text>
-            <Text style={styles.timelineMeta}>{Math.max(1, Math.round(s.ms / 1000))}s</Text>
+          <View key={i} style={styles.threadRow}>
+            <View style={styles.threadRail}>
+              {!last ? <View style={styles.threadConnector} /> : null}
+              {r.kind === "pending" ? (
+                <View style={styles.threadSpinner}>
+                  <ActivityIndicator size="small" color={theme.accent} style={styles.timelineSpinnerInner} />
+                </View>
+              ) : (
+                <View style={[styles.threadDot, thinking ? styles.timelineDotThink : styles.timelineDotAct]} />
+              )}
+            </View>
+            {r.kind === "step" ? (
+              <>
+                <Text style={[styles.timelineLabel, thinking && styles.timelineLabelDim]} numberOfLines={2}>
+                  {r.s.label}
+                </Text>
+                <Text style={styles.timelineMeta}>{Math.max(1, Math.round(r.s.ms / 1000))}s</Text>
+              </>
+            ) : r.kind === "pending" ? (
+              <Text style={styles.timelineLabel} numberOfLines={2}>{pendingLabel}</Text>
+            ) : (
+              <View style={styles.threadAnswer}>{children}</View>
+            )}
           </View>
         );
       })}
-      {live && pendingLabel ? (
-        // The in-progress step: a spinner at the pin instead of a static dot.
-        <View style={styles.timelineRow}>
-          <View style={styles.timelineSpinner}>
-            <ActivityIndicator size="small" color={theme.accent} style={styles.timelineSpinnerInner} />
-          </View>
-          <Text style={styles.timelineLabel} numberOfLines={2}>{pendingLabel}</Text>
-        </View>
-      ) : null}
     </View>
   );
 }
@@ -943,19 +957,26 @@ export default function ChatScreen({
       );
     }
     const isLast = item.id === messages[messages.length - 1]?.id;
+    const answer = (
+      <>
+        {item.imageUri ? (
+          <TouchableOpacity activeOpacity={0.85} onPress={() => setFullImage(item.imageUri!)}>
+            <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" />
+          </TouchableOpacity>
+        ) : null}
+        <Markdown style={mdStyles} rules={mdRules}>
+          {withInlineImages(item.text)}
+        </Markdown>
+      </>
+    );
     return (
       <View style={styles.modelMsg}>
-        {showTimeline && item.activity ? <ActivityTimeline steps={item.activity} /> : null}
-        <View style={showTimeline && item.activity ? styles.modelBody : undefined}>
-          {item.imageUri ? (
-            <TouchableOpacity activeOpacity={0.85} onPress={() => setFullImage(item.imageUri!)}>
-              <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" />
-            </TouchableOpacity>
-          ) : null}
-          <Markdown style={mdStyles} rules={mdRules}>
-            {withInlineImages(item.text)}
-          </Markdown>
-        </View>
+        {showTimeline && item.activity ? (
+          // Steps + the answer on one pinned thread (answer is the final pin).
+          <ModelThread steps={item.activity}>{answer}</ModelThread>
+        ) : (
+          answer
+        )}
         <View style={styles.modelActions}>
           <TouchableOpacity onPress={() => copyMessage(item)} hitSlop={10}>
             <Ionicons
@@ -1010,12 +1031,13 @@ export default function ChatScreen({
           (busy && showTimeline) || displayed !== "" ? (
             <View style={styles.modelMsg}>
               {showTimeline && busy ? (
-                <ActivityTimeline steps={liveActivity} live pendingLabel={status ?? "Thinking…"} />
-              ) : null}
-              {displayed !== "" ? (
-                <View style={showTimeline ? styles.modelBody : undefined}>
-                  <Text style={styles.modelText} selectable>{displayed}</Text>
-                </View>
+                // Live thread: steps + spinner pin; once text streams it becomes
+                // the answer pin (children) and the spinner drops.
+                <ModelThread steps={liveActivity} pendingLabel={status ?? "Thinking…"}>
+                  {displayed !== "" ? <Text style={styles.modelText} selectable>{displayed}</Text> : undefined}
+                </ModelThread>
+              ) : displayed !== "" ? (
+                <Text style={styles.modelText} selectable>{displayed}</Text>
               ) : null}
             </View>
           ) : null
@@ -1425,22 +1447,21 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   modelMsg: { paddingHorizontal: 4, paddingTop: 2, paddingBottom: 8 },
-  timeline: { position: "relative", marginBottom: 12, paddingVertical: 2 },
-  // Vertical thread line behind the dots (dot centre sits at x≈6).
-  timelineLine: { position: "absolute", left: 5, top: 12, bottom: 12, width: 1.5, backgroundColor: theme.border },
-  timelineRow: { flexDirection: "row", alignItems: "center", gap: 11, paddingVertical: 5 },
-  // Dots punch through the line via a bg-coloured ring.
-  timelineDot: { width: 11, height: 11, borderRadius: 6, borderWidth: 2.5, borderColor: theme.bg },
+  // One continuous thread: each row = [rail with dot + connector][content].
+  threadRow: { flexDirection: "row", alignItems: "flex-start", gap: 11 },
+  threadRail: { width: 11, position: "relative", alignItems: "center" },
+  // Connector runs from this row's dot down into the next row's dot.
+  threadConnector: { position: "absolute", left: 4.75, top: 8, bottom: -9, width: 1.5, backgroundColor: theme.border },
+  // Dots punch through the line via a bg-coloured ring; nudged to the text line.
+  threadDot: { width: 11, height: 11, borderRadius: 6, borderWidth: 2.5, borderColor: theme.bg, marginTop: 3 },
+  threadSpinner: { width: 11, height: 11, alignItems: "center", justifyContent: "center", marginTop: 3 },
+  threadAnswer: { flex: 1, paddingTop: 1, paddingBottom: 4 },
   timelineDotAct: { backgroundColor: theme.accent },
   timelineDotThink: { backgroundColor: theme.textDim },
-  timelineLabel: { color: theme.text, fontSize: 13, fontWeight: "600", flex: 1 },
+  timelineLabel: { color: theme.text, fontSize: 13, fontWeight: "600", flex: 1, paddingVertical: 4 },
   timelineLabelDim: { color: theme.textDim, fontWeight: "500" },
-  timelineMeta: { color: theme.textDim, fontSize: 11, opacity: 0.8 },
-  // Spinner sits where a dot would, centred on the thread line.
-  timelineSpinner: { width: 11, height: 11, alignItems: "center", justifyContent: "center" },
+  timelineMeta: { color: theme.textDim, fontSize: 11, opacity: 0.8, paddingVertical: 4 },
   timelineSpinnerInner: { transform: [{ scale: 0.6 }] },
-  // Reply text aligns with the timeline labels (dots hang in the left gutter).
-  modelBody: { paddingLeft: 22 },
   modelActions: { flexDirection: "row", gap: 18, marginTop: 8, alignItems: "center", alignSelf: "flex-end" },
   attachImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 6 },
   bubbleActions: { flexDirection: "row", gap: 16, alignSelf: "flex-end", marginTop: 6, alignItems: "center" },
