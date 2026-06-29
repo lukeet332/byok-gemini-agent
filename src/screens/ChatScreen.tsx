@@ -186,8 +186,16 @@ function fmtTokens(n: number): string {
 // Activity timeline for a turn, rendered like a pinned vertical thread: a
 // continuous line with a dot at each step, thinking and tool actions
 // interspersed. Always shown (when the setting is on) — no accordion.
-function ActivityTimeline({ steps, live }: { steps: ActivityStep[]; live?: boolean }) {
-  if (!steps.length) return null;
+function ActivityTimeline({
+  steps,
+  live,
+  pendingLabel,
+}: {
+  steps: ActivityStep[];
+  live?: boolean;
+  pendingLabel?: string;
+}) {
+  if (!steps.length && !pendingLabel) return null;
   const tokens = steps[steps.length - 1]?.tokens ?? 0;
   const tok = fmtTokens(tokens);
   return (
@@ -206,10 +214,19 @@ function ActivityTimeline({ steps, live }: { steps: ActivityStep[]; live?: boole
           </View>
         );
       })}
-      {tok ? (
+      {live && pendingLabel ? (
+        // The in-progress step: a spinner at the pin instead of a static dot.
+        <View style={styles.timelineRow}>
+          <View style={styles.timelineSpinner}>
+            <ActivityIndicator size="small" color={theme.accent} style={styles.timelineSpinnerInner} />
+          </View>
+          <Text style={styles.timelineLabel} numberOfLines={2}>{pendingLabel}</Text>
+          {tok ? <Text style={styles.timelineMeta}>{tok} tokens</Text> : null}
+        </View>
+      ) : tok ? (
         <View style={styles.timelineRow}>
           <View style={[styles.timelineDot, styles.timelineDotThink]} />
-          <Text style={[styles.timelineLabel, styles.timelineLabelDim]}>{live ? "Working…" : "Done"}</Text>
+          <Text style={[styles.timelineLabel, styles.timelineLabelDim]}>Done</Text>
           <Text style={styles.timelineMeta}>{tok} tokens</Text>
         </View>
       ) : null}
@@ -938,14 +955,16 @@ export default function ChatScreen({
     return (
       <View style={styles.modelMsg}>
         {showTimeline && item.activity ? <ActivityTimeline steps={item.activity} /> : null}
-        {item.imageUri ? (
-          <TouchableOpacity activeOpacity={0.85} onPress={() => setFullImage(item.imageUri!)}>
-            <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" />
-          </TouchableOpacity>
-        ) : null}
-        <Markdown style={mdStyles} rules={mdRules}>
-          {withInlineImages(item.text)}
-        </Markdown>
+        <View style={showTimeline && item.activity ? styles.modelBody : undefined}>
+          {item.imageUri ? (
+            <TouchableOpacity activeOpacity={0.85} onPress={() => setFullImage(item.imageUri!)}>
+              <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" />
+            </TouchableOpacity>
+          ) : null}
+          <Markdown style={mdStyles} rules={mdRules}>
+            {withInlineImages(item.text)}
+          </Markdown>
+        </View>
         <View style={styles.modelActions}>
           <TouchableOpacity onPress={() => copyMessage(item)} hitSlop={10}>
             <Ionicons
@@ -997,10 +1016,16 @@ export default function ChatScreen({
         contentContainerStyle={[styles.listContent, { paddingBottom: bottomBarH + 12 }]}
         onContentSizeChange={scrollToEnd}
         ListFooterComponent={
-          (busy && liveActivity.length) || displayed !== "" ? (
+          (busy && showTimeline) || displayed !== "" ? (
             <View style={styles.modelMsg}>
-              {showTimeline && busy && liveActivity.length ? <ActivityTimeline steps={liveActivity} live /> : null}
-              {displayed !== "" ? <Text style={styles.modelText} selectable>{displayed}</Text> : null}
+              {showTimeline && busy ? (
+                <ActivityTimeline steps={liveActivity} live pendingLabel={status ?? "Thinking…"} />
+              ) : null}
+              {displayed !== "" ? (
+                <View style={showTimeline ? styles.modelBody : undefined}>
+                  <Text style={styles.modelText} selectable>{displayed}</Text>
+                </View>
+              ) : null}
             </View>
           ) : null
         }
@@ -1420,6 +1445,11 @@ const styles = StyleSheet.create({
   timelineLabel: { color: theme.text, fontSize: 13, fontWeight: "600", flex: 1 },
   timelineLabelDim: { color: theme.textDim, fontWeight: "500" },
   timelineMeta: { color: theme.textDim, fontSize: 11, opacity: 0.8 },
+  // Spinner sits where a dot would, centred on the thread line.
+  timelineSpinner: { width: 11, height: 11, alignItems: "center", justifyContent: "center" },
+  timelineSpinnerInner: { transform: [{ scale: 0.6 }] },
+  // Reply text aligns with the timeline labels (dots hang in the left gutter).
+  modelBody: { paddingLeft: 22 },
   modelActions: { flexDirection: "row", gap: 18, marginTop: 8, alignItems: "center", alignSelf: "flex-end" },
   attachImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 6 },
   bubbleActions: { flexDirection: "row", gap: 16, alignSelf: "flex-end", marginTop: 6, alignItems: "center" },
