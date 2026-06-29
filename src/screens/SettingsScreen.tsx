@@ -25,6 +25,7 @@ import { Ionicons } from "@expo/vector-icons";
 import {
   getAnthropicConfig,
   getApprovalMode,
+  getShowTimeline,
   getBackgroundRun,
   getConfirmSystemActions,
   getExecMode,
@@ -48,6 +49,7 @@ import {
   saveModel,
   saveOpenAiConfig,
   saveApprovalMode,
+  saveShowTimeline,
   saveProMode,
   saveProvider,
   saveSystemPrompt,
@@ -107,6 +109,7 @@ export default function SettingsScreen() {
   const [githubToken, setGithubToken] = useState("");
   const [writeMode, setWriteMode] = useState<GitWriteMode>("pr");
   const [approvalMode, setApprovalModeState] = useState<ApprovalMode>("batched");
+  const [showTimeline, setShowTimelineState] = useState(true);
   const [integrationsOpen, setIntegrationsOpen] = useState(false);
   const [secrets, setSecrets] = useState<NamedSecret[]>([]);
   const [newName, setNewName] = useState("");
@@ -206,6 +209,7 @@ export default function SettingsScreen() {
       setGithubToken(await getGithubToken());
       setWriteMode(await getWriteMode());
       setApprovalModeState(await getApprovalMode());
+      setShowTimelineState(await getShowTimeline());
       setSystemPrompt(await getSystemPrompt());
       setUserNotes(await getUserNotes());
       setSecrets(await loadSecrets());
@@ -277,6 +281,10 @@ export default function SettingsScreen() {
   function pickApprovalMode(m: ApprovalMode) {
     setApprovalModeState(m);
     void saveApprovalMode(m);
+  }
+  function toggleShowTimeline(v: boolean) {
+    setShowTimelineState(v);
+    void saveShowTimeline(v);
   }
 
   async function onClearLogs() {
@@ -589,6 +597,22 @@ export default function SettingsScreen() {
               ? "Tick each action to allow — nothing runs until you Apply."
               : "Approve a whole task in one prompt."}
         </Text>
+
+        <View style={[styles.toggleRow, styles.toggleRowTop]}>
+          <View style={styles.toggleTextWrap}>
+            <Text style={styles.toggleName}>Show activity timeline</Text>
+            <Text style={styles.hint}>
+              Show each reply's steps (thinking time, web searches, tools) with token counts. It's always recorded
+              as a debug log — this just controls whether it's shown in chat.
+            </Text>
+          </View>
+          <Switch
+            value={showTimeline}
+            onValueChange={toggleShowTimeline}
+            trackColor={{ false: theme.border, true: theme.accent }}
+            thumbColor={theme.text}
+          />
+        </View>
 
         <View style={[styles.toggleRow, styles.toggleRowTop]}>
           <View style={styles.toggleTextWrap}>

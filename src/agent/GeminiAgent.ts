@@ -1301,6 +1301,7 @@ async function callGemini(
     throw new Error(`Request blocked by Gemini: ${data.promptFeedback.blockReason}.`);
   const content = data.candidates?.[0]?.content;
   if (!content) throw new Error("Gemini returned no content.");
+  lastCallTokens = (data as { usageMetadata?: { totalTokenCount?: number } }).usageMetadata?.totalTokenCount ?? 0;
   return content;
 }
 
@@ -1356,6 +1357,7 @@ async function streamModelTurn(
   let chunks = 0;
   const calls: Part[] = [];
 
+  lastCallTokens = 0;
   const consume = (jsonStr: string) => {
     let data: GeminiResponse;
     try {
@@ -1363,6 +1365,8 @@ async function streamModelTurn(
     } catch {
       return;
     }
+    const u = (data as { usageMetadata?: { totalTokenCount?: number } }).usageMetadata?.totalTokenCount;
+    if (typeof u === "number") lastCallTokens = u; // final chunk carries the total
     const parts = data.candidates?.[0]?.content?.parts ?? [];
     for (const p of parts) {
       if (typeof p.text === "string") {
@@ -1568,6 +1572,7 @@ async function callOpenAi(
   if (!res.ok) throw new Error(data?.error?.message ?? `AI request failed (${res.status}).`);
   const message = data?.choices?.[0]?.message;
   if (!message) throw new Error("AI returned no content.");
+  lastCallTokens = typeof data?.usage?.total_tokens === "number" ? data.usage.total_tokens : 0;
   const parts: Part[] = [];
   const textOut = typeof message.content === "string" ? message.content : "";
   if (textOut) {
@@ -1683,6 +1688,7 @@ async function callAnthropic(
   }
   const data = (await res.json().catch(() => ({}))) as any;
   if (!res.ok) throw new Error(data?.error?.message ?? `Claude request failed (${res.status}).`);
+  lastCallTokens = (Number(data?.usage?.input_tokens) || 0) + (Number(data?.usage?.output_tokens) || 0);
   const blocks = Array.isArray(data?.content) ? data.content : [];
   const parts: Part[] = [];
   let textAcc = "";
@@ -1779,7 +1785,16 @@ export interface AgentCallbacks {
   confirmWrite?: (
     reqs: { method: string; url: string }[]
   ) => Promise<{ decisions: boolean[]; feedback?: string }>;
+  // Real-time activity timeline: a step finished (thinking, a tool, wrap-up).
+  // `tokens` is the running total for the turn so far (0 if the provider didn't
+  // report usage). Always recorded; the chat shows it only when the setting is on.
+  onActivity?: (step: { label: string; ms: number; tokens: number }) => void;
 }
+
+// Token usage of the most recent model call — set by each provider after it
+// parses its response, read by the turn loop to keep a running total. Module-
+// level (one turn runs at a time) to avoid threading it through callModel.
+let lastCallTokens = 0;
 
 export class AbortedError extends Error {
   constructor() {
@@ -1852,6 +1867,15 @@ async function maybeLogFailure(
   } catch {
     // Logging must never break a turn.
   }
+}
+
+// A short, past-tense-ish label for the activity timeline (reuses statusFor's
+// phrasing, trimmed of the trailing "…" and any long argument tail).
+function activityLabel(call: FunctionCall): string {
+  const s = statusFor(call).replace(/\.{3}$/, "").replace(/…$/, "");
+  const colon = s.indexOf(":");
+  // Keep "Searching the web" not the whole query; keep short labels whole.
+  return colon > 0 && s.length - colon > 24 ? s.slice(0, colon) : s;
 }
 
 function statusFor(call: FunctionCall): string {
@@ -1940,12 +1964,16 @@ export async function runAgentTurn(
   // so we pre-approve UI automation for the rest of the turn instead of popping a
   // dialog that can never be seen.
   let uiPreApproved = false;
+  // Activity timeline: running token total + step emitter (no-op if no callback).
+  let turnTokens = 0;
+  const emitActivity = callbacks.onActivity ?? (() => {});
 
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) throw new AbortedError();
     setStatus("Thinking...");
     // Route to the configured backend (Gemini streams; others are single-shot).
     let turn: Content;
+    const thinkStart = Date.now();
     try {
       turn = await callModel(history, systemInstruction, signal, callbacks.onToken);
     } catch (err) {
@@ -1966,8 +1994,15 @@ export async function runAgentTurn(
       throw err;
     }
     history.push(turn);
+    turnTokens += lastCallTokens;
+    lastCallTokens = 0;
 
     const calls = functionCallsIn(turn);
+    // Timeline: a "thinking" step for this model round (label by duration).
+    {
+      const ms = Date.now() - thinkStart;
+      emitActivity({ label: `Thought for ${Math.max(1, Math.round(ms / 1000))}s`, ms, tokens: turnTokens });
+    }
     if (calls.length === 0) {
       // The task is done. If we drove another app this turn, we're probably still
       // foregrounded there — return to Fraude automatically (intent-based, so it
@@ -2107,7 +2142,15 @@ export async function runAgentTurn(
     // independent and run concurrently; dependent steps it emits across separate
     // turns (so they're already serialized). The system prompt states this rule.
     setStatus(plans.length > 1 ? `Running ${plans.length} tools...` : statusFor(plans[0].call));
+    const toolStart = Date.now();
     const results = await Promise.all(plans.map(execPlan));
+    // Timeline: one step per tool (they run concurrently, so share the batch time).
+    {
+      const ms = Date.now() - toolStart;
+      for (const p of plans) {
+        emitActivity({ label: activityLabel(p.call), ms, tokens: turnTokens });
+      }
+    }
 
     const responseParts: Part[] = [];
     for (let i = 0; i < plans.length; i++) {

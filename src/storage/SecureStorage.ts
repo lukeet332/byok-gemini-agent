@@ -308,6 +308,18 @@ export async function saveApprovalMode(mode: ApprovalMode): Promise<void> {
   await SecureStore.setItemAsync(APPROVAL_MODE_KEY, mode);
 }
 
+// ---- Activity timeline visibility in chat (default on; data is always recorded) ----
+
+const SHOW_TIMELINE_KEY = "SHOW_TIMELINE";
+
+export async function getShowTimeline(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(SHOW_TIMELINE_KEY)) !== "0"; // default on
+}
+
+export async function saveShowTimeline(on: boolean): Promise<void> {
+  await SecureStore.setItemAsync(SHOW_TIMELINE_KEY, on ? "1" : "0");
+}
+
 // ---- Custom named secrets ----
 
 async function readIndex(): Promise<string[]> {

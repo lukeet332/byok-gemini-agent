@@ -38,7 +38,7 @@ import {
 
 import { AbortedError, compactConversation, runAgentTurn, stripLeadingTitle } from "../agent/GeminiAgent";
 import { notifyTurnDone } from "../agent/Background";
-import { getApprovalMode, getBackgroundRun, getConfirmSystemActions, getProMode, saveApprovalMode } from "../storage/SecureStorage";
+import { getApprovalMode, getBackgroundRun, getConfirmSystemActions, getProMode, getShowTimeline, saveApprovalMode } from "../storage/SecureStorage";
 import McpServersModal from "./McpServersModal";
 import {
   COMPACT_THRESHOLD_CHARS,
@@ -48,7 +48,7 @@ import {
   newThread,
   saveThread,
 } from "../storage/ThreadStore";
-import { ChatMessage, Content, Part, Thread } from "../types";
+import { ActivityStep, ChatMessage, Content, Part, Thread } from "../types";
 import { theme } from "../theme";
 
 let seq = 0;
@@ -178,6 +178,40 @@ function VoiceWave({ level, color }: { level: number; color: string }) {
   );
 }
 
+function fmtTokens(n: number): string {
+  if (!n) return "";
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+// Collapsible activity timeline for a turn (thinking + tool steps + running
+// tokens). Collapsed shows a summary; live turns start expanded so steps appear
+// in real time.
+function ActivityTimeline({ steps, live }: { steps: ActivityStep[]; live?: boolean }) {
+  const [open, setOpen] = useState(!!live);
+  if (!steps.length) return null;
+  const totalMs = steps.reduce((a, s) => a + s.ms, 0);
+  const tokens = steps[steps.length - 1]?.tokens ?? 0;
+  const tok = fmtTokens(tokens);
+  const summary = `${live ? "Working" : "Worked"} ${Math.max(1, Math.round(totalMs / 1000))}s${tok ? ` · ${tok} tokens` : ""}`;
+  return (
+    <View style={styles.timeline}>
+      <TouchableOpacity style={styles.timelineHead} onPress={() => setOpen((o) => !o)} hitSlop={6}>
+        <Ionicons name={open ? "chevron-down" : "chevron-forward"} size={13} color={theme.textDim} />
+        <Text style={styles.timelineSummary}>{summary}</Text>
+      </TouchableOpacity>
+      {open
+        ? steps.map((s, i) => (
+            <View key={i} style={styles.timelineRow}>
+              <View style={styles.timelineDot} />
+              <Text style={styles.timelineLabel} numberOfLines={1}>{s.label}</Text>
+              <Text style={styles.timelineMeta}>{Math.max(1, Math.round(s.ms / 1000))}s</Text>
+            </View>
+          ))
+        : null}
+    </View>
+  );
+}
+
 // Keep the last KEEP_RECENT_TURNS user messages verbatim; everything before the
 // start of that window is eligible to be folded into the memo. Splitting on a
 // user-message boundary keeps tool call/response pairs intact for the API.
@@ -224,6 +258,13 @@ export default function ChatScreen({
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
   const [inputFocused, setInputFocused] = useState(false); // glow the composer when active
+  // Activity timeline: live steps for the in-flight turn + whether to show it.
+  const [liveActivity, setLiveActivity] = useState<ActivityStep[]>([]);
+  const activityRef = useRef<ActivityStep[]>([]);
+  const [showTimeline, setShowTimeline] = useState(true);
+  useEffect(() => {
+    getShowTimeline().then(setShowTimeline);
+  }, []);
   const [micLevel, setMicLevel] = useState(0); // 0..1 live input loudness
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -648,10 +689,14 @@ export default function ChatScreen({
     action?: ChatMessage["action"],
     canRetry?: boolean,
     imageUri?: string,
-    attachName?: string
+    attachName?: string,
+    activity?: ActivityStep[]
   ): string {
     const id = nextId();
-    setMessages((prev) => [...prev, { id, role, text, action, canRetry, imageUri, attachName }]);
+    setMessages((prev) => [
+      ...prev,
+      { id, role, text, action, canRetry, imageUri, attachName, activity: activity?.length ? activity : undefined },
+    ]);
     scrollToEnd();
     return id;
   }
@@ -754,6 +799,8 @@ export default function ChatScreen({
     runningRef.current = true;
     setBusy(true);
     setNeedsResume(false);
+    activityRef.current = [];
+    setLiveActivity([]);
     const requestTitle = !!titleFrom; // first message → ask the model to title it inline
     const controller = new AbortController();
     abortRef.current = controller;
@@ -773,6 +820,10 @@ export default function ChatScreen({
           },
           signal: controller.signal,
           confirmWrite,
+          onActivity: (step) => {
+            activityRef.current = [...activityRef.current, step];
+            setLiveActivity(activityRef.current);
+          },
         },
         thread.memo,
         { threadId: thread.id, threadTitle: thread.title },
@@ -798,7 +849,8 @@ export default function ChatScreen({
       await saveThread(updated);
       onThreadChanged();
       resetStream();
-      const replyId = pushMessage("model", result.reply);
+      const replyId = pushMessage("model", result.reply, undefined, false, undefined, undefined, activityRef.current);
+      setLiveActivity([]);
       if (wasVoice) startSpeak(replyId, result.reply);
       // Finished while the user was away → ping them their reply is ready.
       if (AppState.currentState !== "active") void notifyTurnDone(updated.title, result.reply);
@@ -834,6 +886,7 @@ export default function ChatScreen({
       resetStream();
       setStatus(null);
       setBusy(false);
+      setLiveActivity([]);
       drainQueue(); // run the next queued / interrupting message, if any
     }
   }
@@ -879,6 +932,7 @@ export default function ChatScreen({
     const isLast = item.id === messages[messages.length - 1]?.id;
     return (
       <View style={styles.modelMsg}>
+        {showTimeline && item.activity ? <ActivityTimeline steps={item.activity} /> : null}
         {item.imageUri ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() => setFullImage(item.imageUri!)}>
             <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" />
@@ -938,9 +992,10 @@ export default function ChatScreen({
         contentContainerStyle={[styles.listContent, { paddingBottom: bottomBarH + 12 }]}
         onContentSizeChange={scrollToEnd}
         ListFooterComponent={
-          displayed !== "" ? (
+          (busy && liveActivity.length) || displayed !== "" ? (
             <View style={styles.modelMsg}>
-              <Text style={styles.modelText} selectable>{displayed}</Text>
+              {showTimeline && busy && liveActivity.length ? <ActivityTimeline steps={liveActivity} live /> : null}
+              {displayed !== "" ? <Text style={styles.modelText} selectable>{displayed}</Text> : null}
             </View>
           ) : null
         }
@@ -1349,6 +1404,13 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   modelMsg: { paddingHorizontal: 4, paddingTop: 2, paddingBottom: 8 },
+  timeline: { marginBottom: 10, paddingLeft: 2 },
+  timelineHead: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 2 },
+  timelineSummary: { color: theme.textDim, fontSize: 12, fontWeight: "700" },
+  timelineRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 3, paddingLeft: 6 },
+  timelineDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.accent },
+  timelineLabel: { color: theme.textDim, fontSize: 12, flex: 1 },
+  timelineMeta: { color: theme.textDim, fontSize: 11, opacity: 0.7 },
   modelActions: { flexDirection: "row", gap: 18, marginTop: 8, alignItems: "center", alignSelf: "flex-end" },
   attachImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 6 },
   bubbleActions: { flexDirection: "row", gap: 16, alignSelf: "flex-end", marginTop: 6, alignItems: "center" },

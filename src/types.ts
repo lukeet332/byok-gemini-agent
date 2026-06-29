@@ -64,6 +64,14 @@ export interface Tool {
 
 // ---- UI-facing message model (a flattened view of Content for rendering) ----
 
+// One step in a turn's activity timeline (thinking, a tool call, …). Always
+// recorded as a debug log; the chat only *shows* it when the setting is on.
+export interface ActivityStep {
+  label: string; // e.g. "Thought for 4s", "Searched the web"
+  ms: number; // duration of this step
+  tokens?: number; // running total tokens up to this step
+}
+
 export interface ChatMessage {
   id: string;
   role: Role;
@@ -76,6 +84,8 @@ export interface ChatMessage {
   imageUri?: string;
   // Optional attached non-image file name to show as a chip in the bubble.
   attachName?: string;
+  // Activity timeline for an assistant turn (steps + timing + running tokens).
+  activity?: ActivityStep[];
 }
 
 // ---- Threads (locally persisted conversations) ----
