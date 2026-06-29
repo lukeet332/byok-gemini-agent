@@ -27,6 +27,9 @@ import Markdown from "react-native-markdown-display";
 import { Ionicons } from "@expo/vector-icons";
 import * as Speech from "expo-speech";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
+import * as Clipboard from "expo-clipboard";
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
@@ -60,10 +63,15 @@ function isInterrupt(text: string): boolean {
   );
 }
 
+// A pending attachment: image/PDF sent inline (base64), or a text file sent as text.
+type Attachment =
+  | { kind: "image" | "doc"; uri: string; name: string; mimeType: string; data: string }
+  | { kind: "text"; uri: string; name: string; mimeType: string; text: string };
+
 interface Queued {
   prompt: string;
   wasVoice: boolean;
-  image?: { uri: string; data: string; mimeType: string };
+  attach?: Attachment;
 }
 
 // Pick the most natural en-GB voice (Enhanced = neural). We deliberately do NOT
@@ -183,6 +191,10 @@ function safeSplit(contents: Content[]): number {
 
 type ApprovalMode = "auto" | "batched" | "granular";
 
+// Set by the screen so the module-level markdown image rule can open a tapped
+// inline image full-screen.
+let imageTapHandler: ((uri: string) => void) | null = null;
+
 interface Props {
   threadId: string;
   onThreadChanged: () => void; // tell the list to refresh (title/updatedAt)
@@ -212,13 +224,18 @@ export default function ChatScreen({
   const [listening, setListening] = useState(false);
   const [micLevel, setMicLevel] = useState(0); // 0..1 live input loudness
   const [speakingId, setSpeakingId] = useState<string | null>(null);
-  const [pendingImage, setPendingImage] = useState<{ uri: string; data: string; mimeType: string } | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [pendingAttach, setPendingAttach] = useState<Attachment | null>(null);
+  const [toast, setToast] = useState<string | null>(null); // themed transient banner
+  const [fullImage, setFullImage] = useState<string | null>(null); // tapped image → full-screen
+  imageTapHandler = setFullImage; // let the markdown image rule open inline images
   // Approval mode (session-only; resets to a confirming mode each launch):
   //  auto     — run everything without asking
   //  batched  — approve the whole batch of actions in ONE prompt (default)
   //  granular — tick/untick each action; nothing runs until you Apply
   const [approvalMode, setApprovalModeState] = useState<ApprovalMode>("batched");
   const [autoMenu, setAutoMenu] = useState(false);
+  const [attachMenu, setAttachMenu] = useState(false);
   const [mcpVisible, setMcpVisible] = useState(false);
   // Themed in-app confirmation (replaces the native Alert). Holds the actions
   // needing a decision; `total` is the full batch size so the result array lines
@@ -515,10 +532,47 @@ export default function ChatScreen({
       });
       if (res.canceled || !res.assets?.length || !res.assets[0].base64) return;
       const a = res.assets[0];
-      setPendingImage({ uri: a.uri, data: a.base64 as string, mimeType: a.mimeType ?? "image/jpeg" });
+      setPendingAttach({ kind: "image", uri: a.uri, name: a.fileName ?? "image", data: a.base64 as string, mimeType: a.mimeType ?? "image/jpeg" });
     } catch {
       // ignore picker errors
     }
+  }
+
+  // Attach any file: images/PDFs go inline (base64); everything else is read as
+  // text (code, logs, JSON, CSV, markdown…) so it works across all providers.
+  async function pickFile() {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({ type: "*/*", copyToCacheDirectory: true });
+      if (res.canceled || !res.assets?.length) return;
+      const a = res.assets[0];
+      const mime = a.mimeType ?? "application/octet-stream";
+      const name = a.name ?? "file";
+      if (mime.startsWith("image/") || mime === "application/pdf") {
+        const data = await FileSystem.readAsStringAsync(a.uri, { encoding: FileSystem.EncodingType.Base64 });
+        setPendingAttach({ kind: mime === "application/pdf" ? "doc" : "image", uri: a.uri, name, mimeType: mime, data });
+      } else {
+        let text = await FileSystem.readAsStringAsync(a.uri, { encoding: FileSystem.EncodingType.UTF8 }).catch(() => "");
+        if (text.length > 200000) text = text.slice(0, 200000) + "\n…[truncated]";
+        if (!text.trim()) {
+          showToast(`Can’t read “${name}” as text`);
+          return;
+        }
+        setPendingAttach({ kind: "text", uri: a.uri, name, mimeType: mime, text });
+      }
+    } catch {
+      // ignore picker errors
+    }
+  }
+
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast((t) => (t === msg ? null : t)), 2200);
+  }
+
+  async function copyMessage(m: ChatMessage) {
+    await Clipboard.setStringAsync(m.text);
+    setCopiedId(m.id);
+    setTimeout(() => setCopiedId((c) => (c === m.id ? null : c)), 1500);
   }
 
   useEffect(() => {
@@ -570,10 +624,11 @@ export default function ChatScreen({
     text: string,
     action?: ChatMessage["action"],
     canRetry?: boolean,
-    imageUri?: string
+    imageUri?: string,
+    attachName?: string
   ): string {
     const id = nextId();
-    setMessages((prev) => [...prev, { id, role, text, action, canRetry, imageUri }]);
+    setMessages((prev) => [...prev, { id, role, text, action, canRetry, imageUri, attachName }]);
     scrollToEnd();
     return id;
   }
@@ -590,15 +645,18 @@ export default function ChatScreen({
       setMcpVisible(true);
       return;
     }
-    const image = pendingImage;
-    if ((!prompt && !image) || !thread) return;
+    const attach = pendingAttach;
+    if ((!prompt && !attach) || !thread) return;
     const wasVoice = voiceInputRef.current;
     voiceInputRef.current = false;
     setInput("");
-    setPendingImage(null);
-    pushMessage("user", prompt, undefined, false, image?.uri); // show it immediately
+    setPendingAttach(null);
+    // Show it immediately: image as a thumb, other files as a name chip.
+    const thumbUri = attach?.kind === "image" ? attach.uri : undefined;
+    const chipName = attach && attach.kind !== "image" ? attach.name : undefined;
+    pushMessage("user", prompt, undefined, false, thumbUri, chipName);
 
-    queueRef.current.push({ prompt, wasVoice, image: image ?? undefined });
+    queueRef.current.push({ prompt, wasVoice, attach: attach ?? undefined });
     setQueuedCount(queueRef.current.length);
 
     if (runningRef.current) {
@@ -622,10 +680,16 @@ export default function ChatScreen({
     const isFirst = base.length === 0;
     const parts: Part[] = [];
     if (next.prompt) parts.push({ text: next.prompt });
-    if (next.image) parts.push({ inlineData: { mimeType: next.image.mimeType, data: next.image.data } });
+    if (next.attach) {
+      if (next.attach.kind === "text") {
+        parts.push({ text: `Attached file "${next.attach.name}":\n\n${next.attach.text}` });
+      } else {
+        parts.push({ inlineData: { mimeType: next.attach.mimeType, data: next.attach.data } });
+      }
+    }
     if (!parts.length) parts.push({ text: "" });
     const nextContents: Content[] = [...base, { role: "user", parts }];
-    void runTurn(nextContents, next.wasVoice, isFirst ? next.prompt || "Image" : null);
+    void runTurn(nextContents, next.wasVoice, isFirst ? next.prompt || next.attach?.name || "Attachment" : null);
   }
 
   // Re-run the last turn on the existing history (which already ends with the
@@ -774,19 +838,47 @@ export default function ChatScreen({
     if (isUser) {
       return (
         <View style={[styles.bubble, styles.userBubble, styles.alignRight]}>
-          {item.imageUri ? <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" /> : null}
+          {item.imageUri ? (
+            <TouchableOpacity activeOpacity={0.85} onPress={() => setFullImage(item.imageUri!)}>
+              <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" />
+            </TouchableOpacity>
+          ) : null}
+          {item.attachName ? (
+            <View style={styles.fileChip}>
+              <Ionicons name="document-text-outline" size={16} color={theme.userBubbleText} />
+              <Text style={styles.fileChipText} numberOfLines={1}>{item.attachName}</Text>
+            </View>
+          ) : null}
           {item.text ? <Text style={styles.userText} selectable>{item.text}</Text> : null}
+          <TouchableOpacity onPress={() => copyMessage(item)} hitSlop={10} style={styles.userCopy}>
+            <Ionicons
+              name={copiedId === item.id ? "checkmark" : "copy-outline"}
+              size={15}
+              color={theme.userBubbleText}
+            />
+          </TouchableOpacity>
         </View>
       );
     }
     const isLast = item.id === messages[messages.length - 1]?.id;
     return (
       <View style={[styles.bubble, styles.modelBubble]}>
-        {item.imageUri ? <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" /> : null}
+        {item.imageUri ? (
+          <TouchableOpacity activeOpacity={0.85} onPress={() => setFullImage(item.imageUri!)}>
+            <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" />
+          </TouchableOpacity>
+        ) : null}
         <Markdown style={mdStyles} rules={mdRules}>
           {withInlineImages(item.text)}
         </Markdown>
         <View style={styles.bubbleActions}>
+          <TouchableOpacity onPress={() => copyMessage(item)} hitSlop={10}>
+            <Ionicons
+              name={copiedId === item.id ? "checkmark" : "copy-outline"}
+              size={19}
+              color={copiedId === item.id ? theme.accent : theme.textDim}
+            />
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => speak(item)} hitSlop={10}>
             <Ionicons
               name={speakingId === item.id ? "stop-circle" : "volume-high-outline"}
@@ -865,11 +957,19 @@ export default function ChatScreen({
         </TouchableOpacity>
       ) : null}
 
-      {pendingImage ? (
+      {pendingAttach ? (
         <View style={styles.attachPreview}>
-          <Image source={{ uri: pendingImage.uri }} style={styles.attachThumb} />
-          <Text style={styles.attachLabel}>Image attached</Text>
-          <TouchableOpacity onPress={() => setPendingImage(null)} hitSlop={8}>
+          {pendingAttach.kind === "image" ? (
+            <Image source={{ uri: pendingAttach.uri }} style={styles.attachThumb} />
+          ) : (
+            <View style={styles.attachFileIcon}>
+              <Ionicons name={pendingAttach.kind === "doc" ? "document-outline" : "document-text-outline"} size={20} color={theme.accent} />
+            </View>
+          )}
+          <Text style={styles.attachLabel} numberOfLines={1}>
+            {pendingAttach.kind === "image" ? "Image attached" : pendingAttach.name}
+          </Text>
+          <TouchableOpacity onPress={() => setPendingAttach(null)} hitSlop={8}>
             <Ionicons name="close-circle" size={22} color={theme.textDim} />
           </TouchableOpacity>
         </View>
@@ -901,7 +1001,7 @@ export default function ChatScreen({
         </View>
         <View style={styles.composerDivider} />
         <View style={styles.composerBottom}>
-          <TouchableOpacity onPress={pickImage} hitSlop={8}>
+          <TouchableOpacity onPress={() => setAttachMenu(true)} hitSlop={8}>
             <Ionicons name="add" size={26} color={theme.textDim} />
           </TouchableOpacity>
           <View style={{ flex: 1 }} />
@@ -924,9 +1024,9 @@ export default function ChatScreen({
             </TouchableOpacity>
           ) : null}
           <TouchableOpacity
-            style={[styles.composerSend, !input.trim() && !pendingImage && styles.sendBtnDisabled]}
+            style={[styles.composerSend, !input.trim() && !pendingAttach && styles.sendBtnDisabled]}
             onPress={() => handleSendMessage(input)}
-            disabled={!input.trim() && !pendingImage}
+            disabled={!input.trim() && !pendingAttach}
           >
             <Ionicons name="arrow-up" size={20} color={theme.bg} />
           </TouchableOpacity>
@@ -935,6 +1035,43 @@ export default function ChatScreen({
       </View>
 
       <McpServersModal visible={mcpVisible} onClose={() => setMcpVisible(false)} />
+
+      <Modal visible={attachMenu} transparent animationType="fade" onRequestClose={() => setAttachMenu(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAttachMenu(false)}>
+          <View style={styles.modeCard}>
+            <Text style={styles.modeCardTitle}>Attach</Text>
+            <TouchableOpacity style={styles.modeRow} onPress={() => { setAttachMenu(false); pickImage(); }}>
+              <Ionicons name="image-outline" size={22} color={theme.accent} />
+              <View style={styles.modeTextWrap}>
+                <Text style={styles.modeName}>Photo</Text>
+                <Text style={styles.modeDesc}>An image from your gallery.</Text>
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.modeRow} onPress={() => { setAttachMenu(false); pickFile(); }}>
+              <Ionicons name="document-outline" size={22} color={theme.accent} />
+              <View style={styles.modeTextWrap}>
+                <Text style={styles.modeName}>File</Text>
+                <Text style={styles.modeDesc}>A PDF or text file — code, logs, CSV, docs…</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal visible={!!fullImage} transparent animationType="fade" onRequestClose={() => setFullImage(null)}>
+        <TouchableOpacity style={styles.fullImageOverlay} activeOpacity={1} onPress={() => setFullImage(null)}>
+          {fullImage ? <Image source={{ uri: fullImage }} style={styles.fullImage} resizeMode="contain" /> : null}
+          <View style={styles.fullImageClose}>
+            <Ionicons name="close" size={28} color="#fff" />
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {toast ? (
+        <View style={styles.toast} pointerEvents="none">
+          <Text style={styles.toastText}>{toast}</Text>
+        </View>
+      ) : null}
 
       <Modal visible={!!confirmReq} transparent animationType="fade" onRequestClose={() => answerConfirm(false)}>
         <View style={styles.confirmOverlay}>
@@ -1100,12 +1237,13 @@ const mdRules = {
     </Text>
   ),
   image: (node: { key: string; attributes: { src?: string } }) => (
-    <Image
+    <TouchableOpacity
       key={node.key}
-      source={{ uri: node.attributes.src }}
-      style={styles.mdImage}
-      resizeMode="contain"
-    />
+      activeOpacity={0.85}
+      onPress={() => node.attributes.src && imageTapHandler?.(node.attributes.src)}
+    >
+      <Image source={{ uri: node.attributes.src }} style={styles.mdImage} resizeMode="contain" />
+    </TouchableOpacity>
   ),
   // Code blocks scroll horizontally so long lines don't overflow or wrap ugly.
   // ```diff blocks render git-style with +/- line colouring (CLI-like review).
@@ -1180,9 +1318,47 @@ const styles = StyleSheet.create({
   modelText: { color: theme.text, fontSize: 15, lineHeight: 21 },
   attachImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 6 },
   bubbleActions: { flexDirection: "row", gap: 16, alignSelf: "flex-end", marginTop: 6, alignItems: "center" },
+  userCopy: { alignSelf: "flex-end", marginTop: 6, opacity: 0.8 },
+  fileChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    marginBottom: 6,
+    maxWidth: "100%",
+  },
+  fileChipText: { color: theme.userBubbleText, fontSize: 13, fontWeight: "600", flexShrink: 1 },
   attachPreview: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingBottom: 6 },
   attachThumb: { width: 40, height: 40, borderRadius: 6 },
+  attachFileIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 6,
+    backgroundColor: theme.surfaceAlt,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   attachLabel: { color: theme.textDim, fontSize: 13, flex: 1 },
+  fullImageOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.92)", alignItems: "center", justifyContent: "center" },
+  fullImage: { width: "100%", height: "85%" },
+  fullImageClose: { position: "absolute", top: 44, right: 20 },
+  toast: {
+    position: "absolute",
+    bottom: 150,
+    alignSelf: "center",
+    maxWidth: "86%",
+    backgroundColor: theme.surfaceAlt,
+    borderWidth: 1,
+    borderColor: theme.border,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  toastText: { color: theme.text, fontSize: 14, fontWeight: "600" },
   errorBubble: { backgroundColor: theme.surface, borderWidth: 1, borderColor: theme.danger },
   errorText: { color: theme.text, fontSize: 14, lineHeight: 20 },
   retryRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10, alignSelf: "flex-start" },

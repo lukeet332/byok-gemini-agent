@@ -2,6 +2,7 @@ package expo.modules.shellexec
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
@@ -37,6 +38,47 @@ class FraudeAccessibilityService : AccessibilityService() {
     walk(root, sb, 0)
     val s = sb.toString()
     return if (s.length > 20000) s.substring(0, 20000) + "\n…[truncated]" else s
+  }
+
+  // A lightweight list of ONLY the interactive controls (clickable / editable),
+  // each as one compact line: kind + label + resource-id. Far smaller and faster
+  // than dump() — enough to pick a tap/type target without reading the whole tree.
+  // A clickable element's label often lives on a child (e.g. an icon button), so
+  // we pull the nearest descendant text/desc when the node itself has none.
+  fun controls(): String {
+    val root = rootInActiveWindow ?: return "(no active window — is an app open?)"
+    val sb = StringBuilder()
+    var count = 0
+    fun visit(node: AccessibilityNodeInfo?) {
+      if (node == null || count >= 80) return
+      if (node.isClickable || node.isEditable) {
+        val label = labelOf(node)
+        val id = node.viewIdResourceName
+        if (!label.isNullOrBlank() || id != null) {
+          sb.append(if (node.isEditable) "type" else "tap").append(": ")
+          if (!label.isNullOrBlank()) sb.append('"').append(label).append("\" ")
+          if (id != null) sb.append("id=").append(id)
+          sb.append('\n')
+          count++
+        }
+      }
+      for (i in 0 until node.childCount) visit(node.getChild(i))
+    }
+    visit(root)
+    val s = sb.toString().ifBlank { "(no interactive controls on screen)" }
+    return if (s.length > 6000) s.substring(0, 6000) + "\n…[truncated]" else s
+  }
+
+  // The node's own text/desc, else the first non-blank text/desc among its
+  // descendants (icon buttons label their child, not the clickable parent).
+  private fun labelOf(node: AccessibilityNodeInfo, depth: Int = 0): String? {
+    node.text?.toString()?.takeIf { it.isNotBlank() }?.let { return it }
+    node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { return it }
+    if (depth > 4) return null
+    for (i in 0 until node.childCount) {
+      labelOf(node.getChild(i) ?: continue, depth + 1)?.let { return it }
+    }
+    return null
   }
 
   private fun walk(node: AccessibilityNodeInfo?, sb: StringBuilder, depth: Int) {
@@ -140,6 +182,26 @@ class FraudeAccessibilityService : AccessibilityService() {
     val args = Bundle()
     args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
     return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+  }
+
+  // Return to Fraude (our own app) from anywhere in any other app's nav stack.
+  // Intent-based task switching is reliable regardless of where automation left
+  // off — unlike GLOBAL_ACTION_BACK/HOME, which walk the target app or hit the
+  // launcher. The accessibility service can start activities even when our app is
+  // backgrounded, so this works mid-automation.
+  fun returnToApp(): Boolean {
+    val intent = packageManager.getLaunchIntentForPackage(packageName) ?: return false
+    intent.addFlags(
+      Intent.FLAG_ACTIVITY_NEW_TASK or
+        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+        Intent.FLAG_ACTIVITY_SINGLE_TOP
+    )
+    return try {
+      startActivity(intent)
+      true
+    } catch (e: Exception) {
+      false
+    }
   }
 
   fun global(action: String): Boolean {

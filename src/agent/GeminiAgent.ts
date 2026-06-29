@@ -606,10 +606,19 @@ const NOTIF_TOOL: FunctionDeclaration = {
 // text/id, not coordinates. This is the no-root way to drive other apps.
 const UI_TOOLS: FunctionDeclaration[] = [
   {
+    name: "ui_controls",
+    description:
+      "FAST, lightweight list of just the INTERACTIVE controls on screen — each with its resource-id, label " +
+      "(text/content-desc) and kind (tap/type). Use this to find a tap/type target instead of ui_screen; it's " +
+      "much smaller and quicker than a full screen read. Then ui_tap by the id or label it shows.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
     name: "ui_screen",
     description:
-      "Read the current screen's elements (text, content-desc, resource-id, clickable/editable, centre coords) " +
-      "via accessibility. Call before tapping/typing and again after each action to confirm the new state.",
+      "Read the on-screen TEXT content (all labelled elements) — heavier. Use ONLY to read displayed text there's " +
+      "no API for (a value/code/status, message text, results). It is text-only: it canNOT see colours, images or " +
+      "visual appearance. To find something to tap, use ui_controls; to confirm a send, use ui_controls (input cleared).",
     parameters: { type: "object", properties: {} },
   },
   {
@@ -880,6 +889,10 @@ const TOOL_EXECUTORS: Record<string, ToolExecutor> = {
       exitCode,
       stdout: content.slice(0, MAX_LOG_VIEW) || (exitCode === 0 ? "Patch applied." : "git apply failed — check the diff against current files."),
     };
+  },
+  ui_controls: async () => {
+    if (!Shell.a11yEnabled()) return { ok: false, error: "Accessibility automation is off. The user can enable it in Settings → Developer settings." };
+    return { ok: true, controls: await Shell.a11yControls() };
   },
   ui_screen: async () => {
     if (!Shell.a11yEnabled()) return { ok: false, error: "Accessibility automation is off. The user can enable it in Settings → Developer settings." };
@@ -1195,10 +1208,12 @@ async function buildSystemInstruction(memo?: string, requestTitle = false): Prom
   }
 
   const a11yLine = Shell.a11yEnabled()
-    ? "\n\nSCREEN AUTOMATION is ENABLED (accessibility): ui_screen (read the current screen's elements), ui_tap({text|id}), ui_type({text}), ui_global({back|home|recents|notifications}) — drive ANY app by element text/id, not coordinates." +
-      " CHOOSING HOW TO ACT (pick the simplest that fully works, in this order): (1) a real API via http_request — most reliable and fully background; use it if the service has one and a key is stored. (2) A deep link / intent (open_link / send_android_intent) that completes the task in one shot — e.g. 'sms:'/'mailto:' with a body, 'tel:', a maps/spotify link. (3) Screen automation when there's no API/deep link, or to finish what a deep link only set up. MANY app actions are 'deep link to pre-fill + accessibility to finish': e.g. WhatsApp — open_link 'https://wa.me/<number>?text=<urlencoded>' (this opens the chat with the message typed), then ui_screen, ui_tap the 'Send' control by its text/description, then ui_global('home') to return to Fraude. Always ui_screen before tapping and again after, and verify the expected element exists before acting." +
-      " SEND/SUBMIT BUTTONS often have NO visible text — their label is a description (e.g. 'Send', 'Send SMS') and the tappable element may be a parent with only a resource-id. ui_tap matches text OR description, so tap by the description ('Send') or the id from ui_screen; don't give up because there's no text label." +
-      " CRITICAL — confirm the action actually happened before you finish: after tapping Send, call ui_screen again and verify the message now appears as a sent bubble in the conversation (or the compose field is empty). ONLY then ui_global('home') and tell the user it was sent. If the message is still sitting unsent in the input, the tap missed — re-read the screen and tap Send again; if it still won't send, navigate home and tell the user honestly that you couldn't confirm it sent. Never claim success you haven't verified on-screen." +
+    ? "\n\nSCREEN AUTOMATION is ENABLED (accessibility): ui_controls (fast list of tappable/typeable controls + their ids), ui_screen (full screen read — heavier), ui_tap({text|id}), ui_type({text}), ui_global({back|home|recents|notifications}) — drive ANY app by element id/text, not coordinates." +
+      " CHOOSING HOW TO ACT (pick the simplest that fully works, in this order): (1) a real API via http_request — most reliable and fully background; use it if the service has one and a key is stored. (2) A deep link / intent (open_link / send_android_intent) that completes the task in one shot — e.g. 'sms:'/'mailto:' with a body, 'tel:', a maps/spotify link. (3) Screen automation when there's no API/deep link, or to finish what a deep link only set up. MANY app actions are 'deep link to pre-fill + accessibility to finish': e.g. WhatsApp — open_link 'https://wa.me/<number>?text=<urlencoded>' (opens the chat with the message typed), then ui_tap the 'Send' control." +
+      " SPEED — use ui_controls to find targets, NOT a full ui_screen scan and NEVER coordinate-guessing. ui_controls returns the real, live resource-ids/labels of what you can tap — light and accurate. (Common send controls you can usually tap directly without any scan: WhatsApp id 'com.whatsapp:id/send' / desc 'Send'; Google Messages id 'Compose:Draft:Send' / desc 'Send SMS'.) Reserve ui_screen for when you must read on-screen CONTENT." +
+      " SEND/SUBMIT buttons often have NO visible text — the label is a content-desc and the tappable node may be a parent with only an id. ui_tap matches id OR text OR description, so tap by whatever ui_controls shows; don't give up for lack of a text label." +
+      " CONFIRM via ui_controls (fast, not ui_screen): after tapping Send, call ui_controls and check the compose/input field NO LONGER contains your message (it clears on a successful send). If your text is still sitting in the input, the tap missed — tap Send again; if it still won't go, tell the user honestly you couldn't confirm it. Never claim success you haven't verified. (Only fall back to ui_screen if you specifically need to read the sent bubble.)" +
+      " RETURNING TO FRAUDE IS AUTOMATIC — when your turn ends, Fraude is brought back to the foreground for you. Do NOT ui_global('home') or ui_global('back') to 'return' (home hits the launcher; back walks the OTHER app's screens — neither returns here). Just finish; you'll be back. Use ui_global('back') ONLY to navigate within the target app mid-task." +
       " tap/type ask the user to confirm unless Auto mode is on."
     : "\n\nScreen automation is OFF. If the user asks you to operate or automate another app's UI (tap/type/press buttons inside it — e.g. send a WhatsApp/Telegram message through the app), do NOT just refuse — tell them to enable it in Settings → Screen automation first, then retry. (You can still use direct deep links and APIs without it.)";
 
@@ -1954,6 +1969,16 @@ export async function runAgentTurn(
 
     const calls = functionCallsIn(turn);
     if (calls.length === 0) {
+      // The task is done. If we drove another app this turn, we're probably still
+      // foregrounded there — return to Fraude automatically (intent-based, so it
+      // works wherever the automation left off; pressing back/home would not).
+      if (uiPreApproved) {
+        try {
+          await Shell.a11yReturnToApp();
+        } catch {
+          // best-effort; never block the reply on the return-to-app
+        }
+      }
       setStatus(null);
       const out = textIn(turn) || "(no response)";
       const { title, reply } = requestTitle ? splitTitle(out) : { title: undefined, reply: out };

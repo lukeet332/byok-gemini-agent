@@ -213,6 +213,10 @@ class ShellExecModule : Module() {
     AsyncFunction("a11yTapId") { id: String -> FraudeAccessibilityService.instance?.tapId(id) ?: false }
     AsyncFunction("a11ySetText") { text: String -> FraudeAccessibilityService.instance?.setText(text) ?: false }
     AsyncFunction("a11yGlobal") { action: String -> FraudeAccessibilityService.instance?.global(action) ?: false }
+    AsyncFunction("a11yReturnToApp") { FraudeAccessibilityService.instance?.returnToApp() ?: false }
+    AsyncFunction("a11yControls") {
+      FraudeAccessibilityService.instance?.controls() ?: "Accessibility service not enabled. Turn it on in Settings → Developer settings."
+    }
 
     // Run a command through Shizuku (shell-uid).
     AsyncFunction("execShizuku") { command: String, timeoutMs: Int ->

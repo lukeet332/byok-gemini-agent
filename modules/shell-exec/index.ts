@@ -31,6 +31,8 @@ interface NativeShell {
   a11yTapId: (id: string) => Promise<boolean>;
   a11ySetText: (text: string) => Promise<boolean>;
   a11yGlobal: (action: string) => Promise<boolean>;
+  a11yReturnToApp: () => Promise<boolean>;
+  a11yControls: () => Promise<string>;
   hasAllFilesAccess: () => boolean;
   requestAllFilesAccess: () => boolean;
   linuxTerminalStatus: () => { supported: boolean; available: boolean; sdk: number };
@@ -156,6 +158,16 @@ export async function a11ySetText(text: string): Promise<boolean> {
 
 export async function a11yGlobal(action: string): Promise<boolean> {
   return native ? native.a11yGlobal(action) : false;
+}
+
+// Return to Fraude from anywhere in another app (intent-based, nav-stack-agnostic).
+export async function a11yReturnToApp(): Promise<boolean> {
+  return native ? native.a11yReturnToApp() : false;
+}
+
+// Lightweight list of just the interactive controls (id + label) — cheaper than a11yDump.
+export async function a11yControls(): Promise<string> {
+  return native ? native.a11yControls() : "Only available on Android.";
 }
 
 // All-files access (lets the app read /sdcard, e.g. Termux's shared output dir).

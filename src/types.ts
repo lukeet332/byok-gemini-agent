@@ -74,6 +74,8 @@ export interface ChatMessage {
   canRetry?: boolean;
   // Optional attached image to show in the bubble (local uri or data: uri).
   imageUri?: string;
+  // Optional attached non-image file name to show as a chip in the bubble.
+  attachName?: string;
 }
 
 // ---- Threads (locally persisted conversations) ----
