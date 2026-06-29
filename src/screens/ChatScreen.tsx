@@ -932,6 +932,9 @@ export default function ChatScreen({
         keyExtractor={(m) => m.id}
         renderItem={renderItem}
         extraData={`${speakingId}|${busy}`}
+        // Android's default (true) recycles/detaches rows, which cancels in-progress
+        // text selection — keep rows attached so long-press select works.
+        removeClippedSubviews={false}
         contentContainerStyle={[styles.listContent, { paddingBottom: bottomBarH + 12 }]}
         onContentSizeChange={scrollToEnd}
         ListFooterComponent={
