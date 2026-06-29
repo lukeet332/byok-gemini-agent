@@ -16,7 +16,6 @@ import {
   ListRenderItemInfo,
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -231,7 +230,6 @@ export default function ChatScreen({
   const [pendingAttach, setPendingAttach] = useState<Attachment | null>(null);
   const [toast, setToast] = useState<string | null>(null); // themed transient banner
   const [fullImage, setFullImage] = useState<string | null>(null); // tapped image → full-screen
-  const [selectText, setSelectText] = useState<string | null>(null); // long-press AI → selectable sheet
   imageTapHandler = setFullImage; // let the markdown image rule open inline images
   // Approval mode (persisted default; settable here via the pill or in Settings):
   //  auto     — run everything without asking
@@ -502,6 +500,9 @@ export default function ChatScreen({
   }
 
   async function toggleMic() {
+    // Stop any reply being read aloud — don't listen while the app is talking.
+    Speech.stop();
+    setSpeakingId(null);
     if (listening) {
       ExpoSpeechRecognitionModule.stop(); // fires "end" → auto-sends
       return;
@@ -877,7 +878,7 @@ export default function ChatScreen({
     }
     const isLast = item.id === messages[messages.length - 1]?.id;
     return (
-      <Pressable style={styles.modelMsg} onLongPress={() => item.text && setSelectText(item.text)} delayLongPress={300}>
+      <View style={styles.modelMsg}>
         {item.imageUri ? (
           <TouchableOpacity activeOpacity={0.85} onPress={() => setFullImage(item.imageUri!)}>
             <Image source={{ uri: item.imageUri }} style={styles.attachImage} resizeMode="cover" />
@@ -907,7 +908,7 @@ export default function ChatScreen({
             </TouchableOpacity>
           ) : null}
         </View>
-      </Pressable>
+      </View>
     );
   }
 
@@ -1093,33 +1094,6 @@ export default function ChatScreen({
             <Ionicons name="close" size={28} color="#fff" />
           </View>
         </TouchableOpacity>
-      </Modal>
-
-      <Modal visible={!!selectText} transparent animationType="slide" onRequestClose={() => setSelectText(null)}>
-        <View style={styles.selectOverlay}>
-          <View style={styles.selectCard}>
-            <View style={styles.selectHead}>
-              <Text style={styles.selectTitle}>Select text</Text>
-              <TouchableOpacity onPress={() => setSelectText(null)} hitSlop={10}>
-                <Ionicons name="close" size={24} color={theme.textDim} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.selectBody}>
-              <Text style={styles.selectBodyText} selectable>{selectText}</Text>
-            </ScrollView>
-            <TouchableOpacity
-              style={styles.selectCopyAll}
-              onPress={() => {
-                if (selectText) void Clipboard.setStringAsync(selectText);
-                setSelectText(null);
-                showToast("Copied");
-              }}
-            >
-              <Ionicons name="copy-outline" size={16} color={theme.bg} />
-              <Text style={styles.selectCopyAllText}>Copy all</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
       </Modal>
 
       {toast ? (
@@ -1372,34 +1346,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   modelMsg: { paddingHorizontal: 4, paddingTop: 2, paddingBottom: 8 },
-  selectOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "flex-end" },
-  selectCard: {
-    backgroundColor: theme.surface,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.border,
-    paddingHorizontal: 18,
-    paddingTop: 14,
-    paddingBottom: 24,
-    maxHeight: "75%",
-  },
-  selectHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
-  selectTitle: { color: theme.text, fontSize: 17, fontWeight: "800" },
-  selectBody: { maxHeight: 380 },
-  selectBodyText: { color: theme.text, fontSize: 15, lineHeight: 22 },
-  selectCopyAll: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: theme.accent,
-    borderRadius: 12,
-    paddingVertical: 13,
-    marginTop: 14,
-  },
-  selectCopyAllText: { color: theme.bg, fontSize: 15, fontWeight: "800" },
-  modelActions: { flexDirection: "row", gap: 18, marginTop: 8, alignItems: "center" },
+  modelActions: { flexDirection: "row", gap: 18, marginTop: 8, alignItems: "center", alignSelf: "flex-end" },
   attachImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 6 },
   bubbleActions: { flexDirection: "row", gap: 16, alignSelf: "flex-end", marginTop: 6, alignItems: "center" },
   userCopy: { alignSelf: "flex-end", marginTop: 6, opacity: 0.8 },
