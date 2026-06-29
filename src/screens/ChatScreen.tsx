@@ -196,8 +196,6 @@ function ActivityTimeline({
   pendingLabel?: string;
 }) {
   if (!steps.length && !pendingLabel) return null;
-  const tokens = steps[steps.length - 1]?.tokens ?? 0;
-  const tok = fmtTokens(tokens);
   return (
     <View style={styles.timeline}>
       {/* the connecting line, behind the dots */}
@@ -221,13 +219,6 @@ function ActivityTimeline({
             <ActivityIndicator size="small" color={theme.accent} style={styles.timelineSpinnerInner} />
           </View>
           <Text style={styles.timelineLabel} numberOfLines={2}>{pendingLabel}</Text>
-          {tok ? <Text style={styles.timelineMeta}>{tok} tokens</Text> : null}
-        </View>
-      ) : tok ? (
-        <View style={styles.timelineRow}>
-          <View style={[styles.timelineDot, styles.timelineDotThink]} />
-          <Text style={[styles.timelineLabel, styles.timelineLabelDim]}>Done</Text>
-          <Text style={styles.timelineMeta}>{tok} tokens</Text>
         </View>
       ) : null}
     </View>
