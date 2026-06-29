@@ -213,12 +213,19 @@ function ModelThread({
           <View key={i} style={styles.threadRow}>
             <View style={styles.threadRail}>
               {!last ? <View style={styles.threadConnector} /> : null}
+              {r.kind === "answer" && i > 0 ? <View style={styles.threadConnectorAnswer} /> : null}
               {r.kind === "pending" ? (
                 <View style={styles.threadSpinner}>
                   <ActivityIndicator size="small" color={theme.accent} style={styles.timelineSpinnerInner} />
                 </View>
               ) : (
-                <View style={[styles.threadDot, thinking ? styles.timelineDotThink : styles.timelineDotAct]} />
+                <View
+                  style={[
+                    styles.threadDot,
+                    thinking ? styles.timelineDotThink : styles.timelineDotAct,
+                    r.kind === "answer" && styles.threadDotAnswer,
+                  ]}
+                />
               )}
             </View>
             {r.kind === "step" ? (
@@ -1467,8 +1474,15 @@ const styles = StyleSheet.create({
   threadConnector: { position: "absolute", left: 4.75, top: 8, bottom: -9, width: 1.5, backgroundColor: theme.border },
   // Dots punch through the line via a bg-coloured ring; nudged to the text line.
   threadDot: { width: 11, height: 11, borderRadius: 6, borderWidth: 2.5, borderColor: theme.bg, marginTop: 3 },
+  // The answer dot sits lower so it lines up with the reply's first line
+  // (the markdown's first-paragraph top margin pushes that line down ~10px).
+  threadDotAnswer: { marginTop: 13 },
+  // Short bridge from the previous pin down to the lowered answer dot. The
+  // variable-length part of the gap is covered by the previous row's
+  // threadConnector (anchored top/bottom, so it stretches with content).
+  threadConnectorAnswer: { position: "absolute", left: 4.75, top: -9, height: 26, width: 1.5, backgroundColor: theme.border },
   threadSpinner: { width: 11, height: 11, alignItems: "center", justifyContent: "center", marginTop: 3 },
-  threadAnswer: { flex: 1, paddingTop: 1, paddingBottom: 4 },
+  threadAnswer: { flex: 1, paddingBottom: 4 },
   timelineDotAct: { backgroundColor: theme.accent },
   timelineDotThink: { backgroundColor: theme.textDim },
   timelineLabel: { color: theme.text, fontSize: 13, fontWeight: "600", flex: 1, paddingVertical: 4 },
