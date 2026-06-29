@@ -616,8 +616,18 @@ export default function ChatScreen({
   }, [initialSend, thread]);
 
   function scrollToEnd() {
+    // Two passes: an immediate one, plus a delayed one to catch late layout
+    // (markdown bubbles and the floating bar measure a frame or two after the
+    // content-size change), so the newest reply never ends up under the composer.
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
+    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
   }
+
+  // Re-pin to the bottom when a message is added/removed or the floating bottom
+  // bar changes height (its height is what the list reserves as padding).
+  useEffect(() => {
+    scrollToEnd();
+  }, [messages.length, bottomBarH]);
 
   function pushMessage(
     role: ChatMessage["role"],
@@ -853,8 +863,8 @@ export default function ChatScreen({
           <TouchableOpacity onPress={() => copyMessage(item)} hitSlop={10} style={styles.userCopy}>
             <Ionicons
               name={copiedId === item.id ? "checkmark" : "copy-outline"}
-              size={15}
-              color={theme.userBubbleText}
+              size={19}
+              color={copiedId === item.id ? theme.accent : theme.userBubbleText}
             />
           </TouchableOpacity>
         </View>
@@ -1217,20 +1227,10 @@ export default function ChatScreen({
 
 // Inline images inside model markdown.
 const mdRules = {
-  // Render text as selectable so users can highlight/copy from replies (the
-  // library's default Text isn't selectable). Preserve nested inline styles
-  // (bold/italic/links) by keeping inheritedStyles + the base text style.
-  text: (
-    node: { key: string; content: string },
-    _children: unknown,
-    _parent: unknown,
-    mdS: { text?: object },
-    inheritedStyles: object = {}
-  ) => (
-    <Text key={node.key} style={[inheritedStyles, mdS.text]} selectable>
-      {node.content}
-    </Text>
-  ),
+  // Make replies highlight/copy-able. selectable goes ONLY on the paragraph
+  // wrapper (textgroup), NOT the inner spans — nested selectable <Text> on
+  // Android each become their own selection region and break unified drag-select.
+  // (The inner text/strong/em spans use the library defaults inside this Text.)
   textgroup: (node: { key: string }, children: React.ReactNode, _parent: unknown, mdS: { textgroup?: object }) => (
     <Text key={node.key} style={mdS.textgroup} selectable>
       {children}
