@@ -183,31 +183,36 @@ function fmtTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
-// Collapsible activity timeline for a turn (thinking + tool steps + running
-// tokens). Collapsed shows a summary; live turns start expanded so steps appear
-// in real time.
+// Activity timeline for a turn, rendered like a pinned vertical thread: a
+// continuous line with a dot at each step, thinking and tool actions
+// interspersed. Always shown (when the setting is on) — no accordion.
 function ActivityTimeline({ steps, live }: { steps: ActivityStep[]; live?: boolean }) {
-  const [open, setOpen] = useState(!!live);
   if (!steps.length) return null;
-  const totalMs = steps.reduce((a, s) => a + s.ms, 0);
   const tokens = steps[steps.length - 1]?.tokens ?? 0;
   const tok = fmtTokens(tokens);
-  const summary = `${live ? "Working" : "Worked"} ${Math.max(1, Math.round(totalMs / 1000))}s${tok ? ` · ${tok} tokens` : ""}`;
   return (
     <View style={styles.timeline}>
-      <TouchableOpacity style={styles.timelineHead} onPress={() => setOpen((o) => !o)} hitSlop={6}>
-        <Ionicons name={open ? "chevron-down" : "chevron-forward"} size={13} color={theme.textDim} />
-        <Text style={styles.timelineSummary}>{summary}</Text>
-      </TouchableOpacity>
-      {open
-        ? steps.map((s, i) => (
-            <View key={i} style={styles.timelineRow}>
-              <View style={styles.timelineDot} />
-              <Text style={styles.timelineLabel} numberOfLines={1}>{s.label}</Text>
-              <Text style={styles.timelineMeta}>{Math.max(1, Math.round(s.ms / 1000))}s</Text>
-            </View>
-          ))
-        : null}
+      {/* the connecting line, behind the dots */}
+      <View style={styles.timelineLine} />
+      {steps.map((s, i) => {
+        const thinking = /^Thought/.test(s.label);
+        return (
+          <View key={i} style={styles.timelineRow}>
+            <View style={[styles.timelineDot, thinking ? styles.timelineDotThink : styles.timelineDotAct]} />
+            <Text style={[styles.timelineLabel, thinking && styles.timelineLabelDim]} numberOfLines={2}>
+              {s.label}
+            </Text>
+            <Text style={styles.timelineMeta}>{Math.max(1, Math.round(s.ms / 1000))}s</Text>
+          </View>
+        );
+      })}
+      {tok ? (
+        <View style={styles.timelineRow}>
+          <View style={[styles.timelineDot, styles.timelineDotThink]} />
+          <Text style={[styles.timelineLabel, styles.timelineLabelDim]}>{live ? "Working…" : "Done"}</Text>
+          <Text style={styles.timelineMeta}>{tok} tokens</Text>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1404,13 +1409,17 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   modelMsg: { paddingHorizontal: 4, paddingTop: 2, paddingBottom: 8 },
-  timeline: { marginBottom: 10, paddingLeft: 2 },
-  timelineHead: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 2 },
-  timelineSummary: { color: theme.textDim, fontSize: 12, fontWeight: "700" },
-  timelineRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 3, paddingLeft: 6 },
-  timelineDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: theme.accent },
-  timelineLabel: { color: theme.textDim, fontSize: 12, flex: 1 },
-  timelineMeta: { color: theme.textDim, fontSize: 11, opacity: 0.7 },
+  timeline: { position: "relative", marginBottom: 12, paddingVertical: 2 },
+  // Vertical thread line behind the dots (dot centre sits at x≈6).
+  timelineLine: { position: "absolute", left: 5, top: 12, bottom: 12, width: 1.5, backgroundColor: theme.border },
+  timelineRow: { flexDirection: "row", alignItems: "center", gap: 11, paddingVertical: 5 },
+  // Dots punch through the line via a bg-coloured ring.
+  timelineDot: { width: 11, height: 11, borderRadius: 6, borderWidth: 2.5, borderColor: theme.bg },
+  timelineDotAct: { backgroundColor: theme.accent },
+  timelineDotThink: { backgroundColor: theme.textDim },
+  timelineLabel: { color: theme.text, fontSize: 13, fontWeight: "600", flex: 1 },
+  timelineLabelDim: { color: theme.textDim, fontWeight: "500" },
+  timelineMeta: { color: theme.textDim, fontSize: 11, opacity: 0.8 },
   modelActions: { flexDirection: "row", gap: 18, marginTop: 8, alignItems: "center", alignSelf: "flex-end" },
   attachImage: { width: 200, height: 200, borderRadius: 10, marginBottom: 6 },
   bubbleActions: { flexDirection: "row", gap: 16, alignSelf: "flex-end", marginTop: 6, alignItems: "center" },
