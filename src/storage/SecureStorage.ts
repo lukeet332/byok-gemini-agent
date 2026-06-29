@@ -294,6 +294,20 @@ export async function saveWriteMode(mode: GitWriteMode): Promise<void> {
   await SecureStore.setItemAsync(WRITE_MODE_KEY, mode);
 }
 
+// ---- Default permission mode (how actions are approved) ----
+
+const APPROVAL_MODE_KEY = "APPROVAL_MODE";
+export type ApprovalMode = "auto" | "batched" | "granular";
+
+export async function getApprovalMode(): Promise<ApprovalMode> {
+  const v = (await SecureStore.getItemAsync(APPROVAL_MODE_KEY)) as ApprovalMode | null;
+  return v === "auto" || v === "granular" ? v : "batched";
+}
+
+export async function saveApprovalMode(mode: ApprovalMode): Promise<void> {
+  await SecureStore.setItemAsync(APPROVAL_MODE_KEY, mode);
+}
+
 // ---- Custom named secrets ----
 
 async function readIndex(): Promise<string[]> {

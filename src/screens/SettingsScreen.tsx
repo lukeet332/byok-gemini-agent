@@ -24,6 +24,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import {
   getAnthropicConfig,
+  getApprovalMode,
   getBackgroundRun,
   getConfirmSystemActions,
   getExecMode,
@@ -46,11 +47,13 @@ import {
   saveGithubToken,
   saveModel,
   saveOpenAiConfig,
+  saveApprovalMode,
   saveProMode,
   saveProvider,
   saveSystemPrompt,
   saveWriteMode,
   AiProvider,
+  ApprovalMode,
   ExecMode,
   GitWriteMode,
   NamedSecret,
@@ -103,11 +106,12 @@ export default function SettingsScreen() {
   const [systemPrompt, setSystemPrompt] = useState("");
   const [githubToken, setGithubToken] = useState("");
   const [writeMode, setWriteMode] = useState<GitWriteMode>("pr");
+  const [approvalMode, setApprovalModeState] = useState<ApprovalMode>("batched");
+  const [integrationsOpen, setIntegrationsOpen] = useState(false);
   const [secrets, setSecrets] = useState<NamedSecret[]>([]);
   const [newName, setNewName] = useState("");
   const [newValue, setNewValue] = useState("");
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [errorGroups, setErrorGroups] = useState<ErrorGroup[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -201,6 +205,7 @@ export default function SettingsScreen() {
       setLinux(linuxTerminalStatus());
       setGithubToken(await getGithubToken());
       setWriteMode(await getWriteMode());
+      setApprovalModeState(await getApprovalMode());
       setSystemPrompt(await getSystemPrompt());
       setUserNotes(await getUserNotes());
       setSecrets(await loadSecrets());
@@ -269,6 +274,10 @@ export default function SettingsScreen() {
     setWriteMode(m);
     void saveWriteMode(m);
   }
+  function pickApprovalMode(m: ApprovalMode) {
+    setApprovalModeState(m);
+    void saveApprovalMode(m);
+  }
 
   async function onClearLogs() {
     await clearErrors();
@@ -310,18 +319,19 @@ export default function SettingsScreen() {
     await saveUserNotes(v.userNotes);
   }
 
-  async function onSave() {
-    setSaving(true);
-    setStatus(null);
-    try {
-      await persistSettings(latest.current);
-      setStatus("Saved securely on this device.");
-    } catch (err) {
-      setStatus(`Save failed: ${String(err)}`);
-    } finally {
-      setSaving(false);
-    }
-  }
+  // Auto-save keys, secrets and text shortly after they change — no manual button.
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    const t = setTimeout(() => {
+      void persistSettings(latest.current)
+        .then(() => {
+          setStatus("Saved ✓");
+          setTimeout(() => setStatus((s) => (s === "Saved ✓" ? null : s)), 1400);
+        })
+        .catch(() => setStatus("Couldn't save"));
+    }, 700);
+    return () => clearTimeout(t);
+  }, [geminiKey, githubToken, anthropicKey, anthropicModel, openaiBase, openaiKey, openaiModel, systemPrompt, userNotes, secrets]);
 
   if (loading) {
     return (
@@ -340,6 +350,7 @@ export default function SettingsScreen() {
           secrets by name — their values are never sent to the model.
         </Text>
 
+        <Text style={[styles.groupHeader, styles.groupHeaderFirst]}>Model &amp; keys</Text>
         <Text style={styles.sectionLabel}>AI provider</Text>
         <Text style={styles.hint}>Which AI runs the agent. Gemini is the default; the app is provider-agnostic.</Text>
         <View style={styles.segment}>
@@ -549,8 +560,37 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </Modal>
 
-        <Text style={styles.sectionLabel}>Pro mode</Text>
-        <View style={styles.toggleRow}>
+        <Text style={styles.groupHeader}>Behaviour</Text>
+
+        <Text style={styles.sectionLabel}>Permission mode</Text>
+        <Text style={styles.hint}>
+          How Fraude asks before actions (API calls, app handoffs, file writes, commits). You can also switch
+          this per-chat with the pill by the message box.
+        </Text>
+        <View style={styles.chips}>
+          {([
+            ["batched", "Batched"],
+            ["granular", "Approve each"],
+            ["auto", "Auto"],
+          ] as [ApprovalMode, string][]).map(([m, label]) => (
+            <TouchableOpacity
+              key={m}
+              style={[styles.chip, approvalMode === m && styles.chipActive]}
+              onPress={() => pickApprovalMode(m)}
+            >
+              <Text style={[styles.chipText, approvalMode === m && styles.chipTextActive]}>{label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <Text style={styles.subhint}>
+          {approvalMode === "auto"
+            ? "Runs everything without asking (Shizuku/root shell still confirms)."
+            : approvalMode === "granular"
+              ? "Tick each action to allow — nothing runs until you Apply."
+              : "Approve a whole task in one prompt."}
+        </Text>
+
+        <View style={[styles.toggleRow, styles.toggleRowTop]}>
           <View style={styles.toggleTextWrap}>
             <Text style={styles.toggleName}>Pro mode</Text>
             <Text style={styles.hint}>
@@ -585,6 +625,8 @@ export default function SettingsScreen() {
           />
         </View>
 
+        <Text style={styles.groupHeader}>Device access</Text>
+
         <Text style={styles.sectionLabel}>Screen automation</Text>
         <Text style={styles.hint}>Let Fraude tap & type in other apps for you (e.g. send a WhatsApp). No root.</Text>
         <View style={styles.advButtons}>
@@ -611,6 +653,13 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
+        <Text style={styles.groupHeader}>Integrations</Text>
+        <TouchableOpacity style={styles.accordionHead} onPress={() => setIntegrationsOpen((o) => !o)}>
+          <Text style={styles.sectionLabel}>GitHub, MCP &amp; API secrets</Text>
+          <Ionicons name={integrationsOpen ? "chevron-down" : "chevron-forward"} size={18} color={theme.textDim} style={styles.accordionChevron} />
+        </TouchableOpacity>
+        {integrationsOpen ? (
+          <>
         <Text style={styles.sectionLabel}>GitHub (coding)</Text>
         <Text style={styles.hint}>
           A Personal Access Token lets the assistant read repos and commit changes. Fine-grained, scoped to
@@ -708,7 +757,10 @@ export default function SettingsScreen() {
             <Text style={styles.addText}>+ Add secret</Text>
           </TouchableOpacity>
         </View>
+          </>
+        ) : null}
 
+        <Text style={styles.groupHeader}>Personalization</Text>
         <TouchableOpacity style={styles.accordionHead} onPress={() => setPromptOpen((o) => !o)}>
           <Text style={styles.sectionLabel}>Agent instructions</Text>
           <Ionicons name={promptOpen ? "chevron-down" : "chevron-forward"} size={18} color={theme.textDim} style={styles.accordionChevron} />
@@ -766,15 +818,15 @@ export default function SettingsScreen() {
           </>
         ) : null}
 
-        <Text style={styles.subhint}>
-          Toggles & dropdowns above save automatically. Use this to save typed fields — API keys, tokens,
-          model ids, instructions, preferences and secrets.
-        </Text>
-        <TouchableOpacity style={[styles.saveBtn, saving && styles.disabled]} onPress={onSave} disabled={saving}>
-          {saving ? <ActivityIndicator color={theme.bg} /> : <Text style={styles.saveText}>Save keys &amp; text</Text>}
-        </TouchableOpacity>
-        {status ? <Text style={styles.saved}>{status}</Text> : null}
+        <View style={styles.autosaveRow}>
+          <Text style={[styles.subhint, { flex: 1, marginTop: 0 }]}>
+            Everything here saves automatically as you type — keys, tokens, instructions, preferences and secrets,
+            all in this device's secure keystore.
+          </Text>
+          {status ? <Text style={styles.saved}>{status}</Text> : null}
+        </View>
 
+        <Text style={styles.groupHeader}>Advanced</Text>
         <TouchableOpacity style={styles.accordionHead} onPress={() => setAdvancedOpen((o) => !o)}>
           <Text style={styles.sectionLabel}>Developer settings</Text>
           <Ionicons name={advancedOpen ? "chevron-down" : "chevron-forward"} size={18} color={theme.textDim} style={styles.accordionChevron} />
@@ -890,6 +942,7 @@ export default function SettingsScreen() {
           </>
         ) : null}
 
+        <Text style={styles.groupHeader}>Diagnostics</Text>
         <View style={styles.logHeader}>
           <Text style={styles.sectionLabel}>Error logs</Text>
           {errorGroups.length > 0 ? (
@@ -957,6 +1010,19 @@ const styles = StyleSheet.create({
   content: { padding: 20, paddingBottom: 48 },
   title: { color: theme.text, fontSize: 28, fontWeight: "700" },
   subtitle: { color: theme.textDim, fontSize: 13, marginTop: 6, marginBottom: 18, lineHeight: 18 },
+  // Top-level group divider — segments the screen into scannable groups.
+  groupHeader: {
+    color: theme.accent,
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    textTransform: "uppercase",
+    marginTop: 28,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: theme.border,
+  },
+  groupHeaderFirst: { marginTop: 6, paddingTop: 0, borderTopWidth: 0 },
   sectionLabel: { color: theme.text, fontSize: 16, fontWeight: "700", marginTop: 14 },
   smallLabel: { color: theme.textDim, fontSize: 13, fontWeight: "600", marginTop: 12, marginBottom: 6 },
   hint: { color: theme.textDim, fontSize: 12, marginTop: 2, marginBottom: 8, lineHeight: 17 },
@@ -992,6 +1058,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   toggleRow: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 8 },
+  toggleRowTop: { marginTop: 16 },
   toggleTextWrap: { flex: 1 },
   toggleName: { color: theme.text, fontSize: 15, fontWeight: "700" },
   advButtons: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
@@ -1070,7 +1137,8 @@ const styles = StyleSheet.create({
   saveText: { color: theme.bg, fontSize: 16, fontWeight: "700" },
   mcpBtn: { borderWidth: 1, borderColor: theme.accent, borderRadius: 12, paddingVertical: 13, alignItems: "center", marginTop: 4 },
   mcpBtnText: { color: theme.accent, fontWeight: "700", fontSize: 14 },
-  saved: { color: theme.accent, fontSize: 13, marginTop: 14, textAlign: "center" },
+  saved: { color: theme.accent, fontSize: 13, fontWeight: "700" },
+  autosaveRow: { flexDirection: "row", alignItems: "flex-start", gap: 10, marginTop: 18 },
   logHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 26 },
   clearText: { color: theme.danger, fontSize: 13, fontWeight: "600" },
   logGroup: { borderWidth: 1, borderColor: theme.border, borderRadius: 12, marginBottom: 8, overflow: "hidden" },

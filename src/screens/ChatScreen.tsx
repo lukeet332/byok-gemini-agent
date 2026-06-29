@@ -30,6 +30,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as Clipboard from "expo-clipboard";
+import { LinearGradient } from "expo-linear-gradient";
 import {
   ExpoSpeechRecognitionModule,
   useSpeechRecognitionEvent,
@@ -37,7 +38,7 @@ import {
 
 import { AbortedError, compactConversation, runAgentTurn, stripLeadingTitle } from "../agent/GeminiAgent";
 import { notifyTurnDone } from "../agent/Background";
-import { getBackgroundRun, getConfirmSystemActions, getProMode } from "../storage/SecureStorage";
+import { getApprovalMode, getBackgroundRun, getConfirmSystemActions, getProMode, saveApprovalMode } from "../storage/SecureStorage";
 import McpServersModal from "./McpServersModal";
 import {
   COMPACT_THRESHOLD_CHARS,
@@ -222,6 +223,7 @@ export default function ChatScreen({
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [listening, setListening] = useState(false);
+  const [inputFocused, setInputFocused] = useState(false); // glow the composer when active
   const [micLevel, setMicLevel] = useState(0); // 0..1 live input loudness
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -229,7 +231,7 @@ export default function ChatScreen({
   const [toast, setToast] = useState<string | null>(null); // themed transient banner
   const [fullImage, setFullImage] = useState<string | null>(null); // tapped image → full-screen
   imageTapHandler = setFullImage; // let the markdown image rule open inline images
-  // Approval mode (session-only; resets to a confirming mode each launch):
+  // Approval mode (persisted default; settable here via the pill or in Settings):
   //  auto     — run everything without asking
   //  batched  — approve the whole batch of actions in ONE prompt (default)
   //  granular — tick/untick each action; nothing runs until you Apply
@@ -257,7 +259,15 @@ export default function ChatScreen({
     approvalRef.current = m;
     setApprovalModeState(m);
     setAutoMenu(false);
+    void saveApprovalMode(m); // persist — this is the default going forward
   }
+  // Load the saved default permission mode (set here via the pill or in Settings).
+  useEffect(() => {
+    getApprovalMode().then((m) => {
+      approvalRef.current = m;
+      setApprovalModeState(m);
+    });
+  }, []);
   // Streaming: targetRef holds the full text so far; `displayed` is the smoothly
   // revealed substring (animated char-by-char by a ticker).
   const [displayed, setDisplayed] = useState("");
@@ -945,6 +955,16 @@ export default function ChatScreen({
         }
       />
 
+      {/* Fade chat content into the background as it nears the floating composer,
+          then stay solid bg BEHIND and BELOW the composer so nothing bleeds out in
+          the gaps. Top ~56px fades; the rest (composer area + below) is opaque. */}
+      <LinearGradient
+        colors={["transparent", theme.bg, theme.bg]}
+        locations={[0, Math.min(0.7, 56 / (bottomBarH + 56)), 1]}
+        style={[styles.bottomFade, { height: bottomBarH + 56 }]}
+        pointerEvents="none"
+      />
+
       <View
         style={styles.bottomBar}
         onLayout={(e) => setBottomBarH(e.nativeEvent.layout.height)}
@@ -986,7 +1006,7 @@ export default function ChatScreen({
       ) : null}
 
       {/* Unified composer: text + mic row, divider, actions row. */}
-      <View style={styles.composer}>
+      <View style={[styles.composer, (inputFocused || listening) && styles.composerActive]}>
         <View style={styles.composerTop}>
           <TextInput
             style={styles.composerInput}
@@ -995,6 +1015,8 @@ export default function ChatScreen({
               setInput(t);
               voiceInputRef.current = false;
             }}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             placeholder={listening ? "Listening…" : busy ? "Queue another message…" : "Message"}
             placeholderTextColor={theme.textDim}
             multiline
@@ -1289,7 +1311,7 @@ const mdRules = {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.bg },
   center: { alignItems: "center", justifyContent: "center" },
-  listContent: { padding: 14, paddingBottom: 8, flexGrow: 1 },
+  listContent: { paddingHorizontal: 8, paddingTop: 14, paddingBottom: 8, flexGrow: 1 },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 },
   emptyTitle: { color: theme.text, fontSize: 20, fontWeight: "700", marginBottom: 8, textAlign: "center" },
   emptyHint: { color: theme.textDim, fontSize: 14, textAlign: "center", lineHeight: 20 },
@@ -1303,12 +1325,13 @@ const styles = StyleSheet.create({
   alignRight: { alignSelf: "flex-end", borderBottomRightRadius: 4 },
   alignLeft: { alignSelf: "flex-start", borderBottomLeftRadius: 4 },
   userBubble: { backgroundColor: theme.userBubble, paddingVertical: 10 },
-  // Stretch to a definite width (capped at the shared bubble maxWidth, 86%, so it
-  // matches the sender bubbles) rather than shrink-to-fit. The definite width lets
-  // markdown lists/tables/code lay out — a shrink-wrapped bubble collapses them to
-  // one word per line. Left-aligned; user messages hug right (see alignRight).
+  // Fill the chat column (a touch wider than the floating composer, and wider
+  // than the 86% user-bubble cap) so replies extend past the composer's edges —
+  // content then visibly fades behind it. The definite width also lets markdown
+  // lists/tables/code lay out (a shrink-wrapped bubble collapses them).
   modelBubble: {
     alignSelf: "stretch",
+    maxWidth: "100%",
     backgroundColor: theme.modelBubble,
     borderWidth: 1,
     borderColor: theme.border,
@@ -1393,8 +1416,9 @@ const styles = StyleSheet.create({
   resumeText: { color: theme.bg, fontWeight: "700", fontSize: 14 },
   statusText: { color: theme.textDim, fontSize: 13, fontStyle: "italic", flex: 1 },
   bottomBar: { position: "absolute", left: 0, right: 0, bottom: 0 },
+  bottomFade: { position: "absolute", left: 0, right: 0, bottom: 0 },
   composer: {
-    margin: 10,
+    margin: 12,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: theme.border,
@@ -1403,6 +1427,15 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 10,
     overflow: "hidden",
+  },
+  // Neon-green glow when the user is typing or dictating (focus / listening).
+  composerActive: {
+    borderColor: theme.accent,
+    shadowColor: theme.accent,
+    shadowOpacity: 0.85,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 16, // Android 28+ tints the elevation shadow with shadowColor
   },
   composerTop: { flexDirection: "row", alignItems: "flex-end", gap: 10, paddingBottom: 8 },
   micActive: {
