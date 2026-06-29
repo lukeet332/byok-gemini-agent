@@ -111,14 +111,15 @@ function dropTitleLine(text: string): string {
 }
 
 // Build the visible bubble list from the structured history (skips tool turns).
-function toMessages(contents: Content[]): ChatMessage[] {
+function toMessages(contents: Content[], activity?: Record<number, ActivityStep[]>): ChatMessage[] {
   const out: ChatMessage[] = [];
-  for (const c of contents) {
+  contents.forEach((c, i) => {
     const text = c.role === "model" ? dropTitleLine(turnText(c)) : turnText(c);
     const img = (c.parts ?? []).find((p) => p.inlineData)?.inlineData;
     const imageUri = img ? `data:${img.mimeType};base64,${img.data}` : undefined;
-    if (text || imageUri) out.push({ id: nextId(), role: c.role, text, imageUri });
-  }
+    if (text || imageUri)
+      out.push({ id: nextId(), role: c.role, text, imageUri, activity: c.role === "model" ? activity?.[i] : undefined });
+  });
   return out;
 }
 
@@ -665,7 +666,7 @@ export default function ChatScreen({
       liveContentsRef.current = loaded.contents;
       queueRef.current = [];
       setQueuedCount(0);
-      setMessages(toMessages(loaded.contents));
+      setMessages(toMessages(loaded.contents, loaded.activity));
       // If the thread ends on an unanswered user message, the last turn was
       // interrupted (backgrounded/killed/crashed) — offer to continue it.
       const last = loaded.contents[loaded.contents.length - 1];
@@ -857,13 +858,25 @@ export default function ChatScreen({
         requestTitle
       );
 
-      let updated: Thread = { ...thread, contents: result.contents, updatedAt: Date.now() };
+      // Record this turn's activity against the reply's index in contents (the
+      // reply is the last item). Persisted on the thread, not in contents.
+      const replyIdx = result.contents.length - 1;
+      let activityMap: Record<number, ActivityStep[]> = { ...(thread.activity ?? {}) };
+      if (activityRef.current.length) activityMap[replyIdx] = activityRef.current;
+      let updated: Thread = { ...thread, contents: result.contents, updatedAt: Date.now(), activity: activityMap };
       if (historySize(updated.contents) > (proModeRef.current ? COMPACT_THRESHOLD_CHARS * 2 : COMPACT_THRESHOLD_CHARS)) {
         const split = safeSplit(updated.contents);
         if (split > 0) {
           setStatus("Compacting memory...");
           const memo = await compactConversation(updated.memo, updated.contents.slice(0, split));
-          updated = { ...updated, memo, contents: updated.contents.slice(split) };
+          // Compaction drops the first `split` contents — shift activity keys down.
+          const shifted: Record<number, ActivityStep[]> = {};
+          for (const k of Object.keys(activityMap)) {
+            const ni = Number(k) - split;
+            if (ni >= 0) shifted[ni] = activityMap[Number(k)];
+          }
+          activityMap = shifted;
+          updated = { ...updated, memo, contents: updated.contents.slice(split), activity: shifted };
         }
       }
       // Title the thread from the AI's first reply — batched into this same turn

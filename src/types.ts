@@ -104,4 +104,8 @@ export interface Thread extends ThreadMeta {
   createdAt: number;
   memo: string;
   contents: Content[];
+  // Activity timeline per assistant reply, keyed by that reply's index in
+  // `contents` (kept out of `contents` so it's never sent to the model API).
+  // Keys shift when older turns are compacted out of `contents`.
+  activity?: Record<number, ActivityStep[]>;
 }
